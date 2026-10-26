@@ -1,0 +1,285 @@
+{
+  "checked_at": "2026-10-25T01:29:54+08:00",
+  "keyword": "AI",
+  "mode": "rendered DOM / dedicated profile",
+  "kinds": {
+    "article": {
+      "samples": [
+        {
+          "url": "https://www.toutiao.com/article/7699775205312315954/",
+          "list_title": "普通人做 AI 自媒体，根本赚不到钱",
+          "list_time": "2026-10-23T16:20:00+08:00",
+          "list_comments": null,
+          "success": true,
+          "detail_title": "普通人做 AI 自媒体，根本赚不到钱",
+          "body_length": 2425,
+          "published_at": "2026-10-23T16:20:00+08:00",
+          "author": "人人都是产品经理",
+          "title_matches": true
+        },
+        {
+          "url": "https://www.toutiao.com/article/7699773759296651812/",
+          "list_title": "玉渊谭天丨“中国AI禁令”是怎么回事",
+          "list_time": "2026-10-23T16:14:00+08:00",
+          "list_comments": null,
+          "success": true,
+          "detail_title": "玉渊谭天丨“中国AI禁令”是怎么回事",
+          "body_length": 3158,
+          "published_at": "2026-10-23T16:14:00+08:00",
+          "author": "光明网",
+          "title_matches": true
+        },
+        {
+          "url": "https://www.toutiao.com/article/7699782901788934694/",
+          "list_title": "AI时代最危险的不是软件公司，而是甲方 IT",
+          "list_time": "2026-10-23T16:50:00+08:00",
+          "list_comments": 29,
+          "success": true,
+          "detail_title": "AI时代最危险的不是软件公司，而是甲方 IT",
+          "body_length": 2436,
+          "published_at": "2026-10-23T16:50:00+08:00",
+          "author": "人人都是产品经理",
+          "title_matches": true
+        },
+        {
+          "url": "https://www.toutiao.com/article/7699792015294284342/",
+          "list_title": "AI短剧火疯了，赢家却没几个",
+          "list_time": "2026-10-23T17:25:00+08:00",
+          "list_comments": null,
+          "success": true,
+          "detail_title": "AI短剧火疯了，赢家却没几个",
+          "body_length": 5633,
+          "published_at": "2026-10-23T17:25:00+08:00",
+          "author": "虎嗅APP",
+          "title_matches": true
+        },
+        {
+          "url": "https://www.toutiao.com/article/7699774782153261606/",
+          "list_title": "AI艺人扎堆出道，赚钱的却没几个?",
+          "list_time": "2026-10-23T16:18:00+08:00",
+          "list_comments": null,
+          "success": true,
+          "detail_title": "AI艺人扎堆出道，赚钱的却没几个？",
+          "body_length": 4127,
+          "published_at": "2026-10-23T16:18:00+08:00",
+          "author": "钛媒体APP",
+          "title_matches": false
+        },
+        {
+          "url": "https://www.toutiao.com/article/7699794871669867044/",
+          "list_title": "AI智能体从概念走进场景",
+          "list_time": "2026-10-23T17:36:00+08:00",
+          "list_comments": null,
+          "success": true,
+          "detail_title": "AI智能体从概念走进场景",
+          "body_length": 3534,
+          "published_at": "2026-10-23T17:36:00+08:00",
+          "author": "海外网",
+          "title_matches": true
+        },
+        {
+          "url": "https://www.toutiao.com/article/7699790090255499818/",
+          "list_title": "王劲松:AI发展迅猛，但无法代替真人演员",
+          "list_time": "2026-10-23T17:18:00+08:00",
+          "list_comments": 2,
+          "success": true,
+          "detail_title": "王劲松：AI发展迅猛，但无法代替真人演员",
+          "body_length": 2407,
+          "published_at": "2026-10-23T17:18:00+08:00",
+          "author": "中国新闻网",
+          "title_matches": false
+        },
+        {
+          "url": "https://www.toutiao.com/article/7699832495252767251/",
+          "list_title": "AI又长本事了!只需一句话，就能生成蛋白质",
+          "list_time": "2026-10-23T20:02:00+08:00",
+          "list_comments": null,
+          "success": true,
+          "detail_title": "AI又长本事了！只需一句话，就能生成蛋白质",
+          "body_length": 976,
+          "published_at": "2026-10-23T20:02:00+08:00",
+          "author": "北青网",
+          "title_matches": false
+        },
+        {
+          "url": "https://www.toutiao.com/article/7699786264782897674/",
+          "list_title": "腾讯司内实践:手把手教你如何用 Skill 与 AI 协作",
+          "list_time": "2026-10-23T17:03:00+08:00",
+          "list_comments": 2,
+          "success": true,
+          "detail_title": "腾讯司内实践：手把手教你如何用 Skill 与 AI 协作",
+          "body_length": 6261,
+          "published_at": "2026-10-23T17:03:00+08:00",
+          "author": "人人都是产品经理",
+          "title_matches": false
+        },
+        {
+          "url": "https://www.toutiao.com/article/7700164548002693641/",
+          "list_title": "热解读｜四种力量，映照长征精神",
+          "detail_title": "热解读｜四种力量，映照长征精神",
+          "success": true,
+          "body_length": 2308,
+          "title_matches": true,
+          "published_at": "2026-10-24T17:32:00+08:00",
+          "author": "央视网",
+          "candidate_source": "homepage rendered anchor"
+        }
+      ],
+      "supported": true,
+      "fields": {
+        "reads": false,
+        "likes": false,
+        "comments": "搜索卡片有显示时可读"
+      },
+      "domain_mode": "keyword_mapping",
+      "candidate_count": 10,
+      "successful_count": 10,
+      "repeat_success": true
+    },
+    "micro": {
+      "samples": [
+        {
+          "url": "https://www.toutiao.com/w/1879943948871687/",
+          "list_title": "...新京报贝壳财经讯(记者白昊天)10月24日,捷达M6正式上市,定位AI纯电大家轿。上市指导价7.98万元—9.98万元。捷达M6体验官、演员孙艺洲提出,汽车现在已经走入万众家庭,用户在车上停留的非驾驶时间越来越长。大家愿意...",
+          "list_time": "2026-10-24T23:29:58.451356+08:00",
+          "list_comments": 1,
+          "list_likes": 0,
+          "success": true,
+          "detail_title": "新京报贝壳",
+          "body_length": 458,
+          "published_at": "2026-10-24T23:04:00+08:00",
+          "author": "新京报",
+          "title_matches": false
+        },
+        {
+          "url": "https://www.toutiao.com/w/1879946845013004/",
+          "list_title": "【#思进摘要点评#AI 落地财务赛道:资本评判标准从省时间转向现金流利润】(资讯来源 | 华尔街俱乐部) 纽约 Net30 应用级 AI 峰会,抛出一个很现实的问题:很多企业上马超级智能,却看不到实打实的财务收益。调研显示,84% 财务团队已经...",
+          "list_time": "2026-10-25T00:29:58.453718+08:00",
+          "list_comments": 0,
+          "list_likes": 0,
+          "success": true,
+          "detail_title": "#思进摘要点评# AI 落地财务赛道：资本评判标准从省时间转向现金流利润",
+          "body_length": 600,
+          "published_at": "2026-10-24T23:50:00+08:00",
+          "author": "陈思进",
+          "title_matches": false
+        },
+        {
+          "url": "https://www.toutiao.com/w/1879939949508672/",
+          "list_title": "科技股的困境。 AI投资叙事正面临自身逻辑的内在矛盾。市场对超大规模云计算厂商资本开支路径的判断,已从此前的“正面无论如何都赢”演变为当前的“两害相权”困境——加速则自由现金流承压,减速则需求前景存疑,两条路均指向AI相关...",
+          "list_time": "2026-10-24T22:29:58.454409+08:00",
+          "list_comments": 0,
+          "list_likes": 3,
+          "success": true,
+          "detail_title": "科技股的困境 AI投资叙事正面临自身逻辑的内在矛盾 市场对超大",
+          "body_length": 432,
+          "published_at": "2026-10-24T22:00:00+08:00",
+          "author": "玉名",
+          "title_matches": false
+        },
+        {
+          "url": "https://www.toutiao.com/w/1879940269996039/",
+          "list_title": "1024中国程序员节:一行代码,守护安康,AI也过程序员节吗?",
+          "list_time": "2026-10-24T22:29:58.455115+08:00",
+          "list_comments": 0,
+          "list_likes": 0,
+          "success": true,
+          "detail_title": "1024中国程序员节：一行代码，守护安康，AI也过程序员节吗？",
+          "body_length": 31,
+          "published_at": "2026-10-24T22:05:00+08:00",
+          "author": "上海康策软件",
+          "title_matches": false
+        },
+        {
+          "url": "https://www.toutiao.com/w/1879940964809728/",
+          "list_title": "观点有意思,但说得有点太绝对了。 “Agent 能力最不重要”这句话,换个角度看其实是成立的。拿着锤子到处找钉子,确实解决不了什么实际问题。真正有价值的,是那些深懂某个行业、某个场景,顺手又会用 AI 的人。这一点我同意。 但说 AI engineer “与 ...",
+          "list_time": "2026-10-24T22:29:58.455430+08:00",
+          "list_comments": 0,
+          "list_likes": 0,
+          "success": true,
+          "detail_title": "观点有意思，但说得有点太绝对了 “Agent 能力最不重要”",
+          "body_length": 432,
+          "published_at": "2026-10-24T22:16:00+08:00",
+          "author": "行痴·知无畏",
+          "title_matches": false
+        },
+        {
+          "url": "https://www.toutiao.com/w/1879940941267979/",
+          "list_title": "杨澜访谈节目《探寻人工智能2026》,对话各界专家,探讨AI发展现状。剖析技术红利与现实困境,思考人机共生的未来。 从前AI大多只能被动聊天、回答问题。如今AI智能体的落地,让它开始自主规划任务、串联流程、闭环执...",
+          "list_time": "2026-10-24T22:29:58.455729+08:00",
+          "list_comments": 2,
+          "list_likes": 2,
+          "success": true,
+          "detail_title": "探寻人工智能，从技术到真实世界",
+          "body_length": 315,
+          "published_at": "2026-10-24T22:16:00+08:00",
+          "author": "不渺小ddd",
+          "title_matches": false
+        },
+        {
+          "url": "https://www.toutiao.com/w/1879951831903244/",
+          "list_title": "AI替代重复的劳动,替代不了人的思想与温度。",
+          "list_time": "2026-10-25T01:09:58.456000+08:00",
+          "list_comments": 0,
+          "list_likes": 0,
+          "success": true,
+          "detail_title": "AI替代重复的劳动，替代不了人的思想与温度",
+          "body_length": 22,
+          "published_at": "2026-10-25T01:09:00+08:00",
+          "author": "行云流水jhq",
+          "title_matches": false
+        },
+        {
+          "url": "https://www.toutiao.com/w/1879942769846344/",
+          "list_title": "第一部AI电影上院线,重估的是整条影视生产链,附概念股 10月23日,国内首部全程AI制作并拿到公映许可的院线长片《三星堆:未来往事》上映,把古蜀文明和科幻放在同一块银幕上,从定档起就备受关注。 不过票房并没有跟...",
+          "list_time": "2026-10-24T23:29:58.456390+08:00",
+          "list_comments": 0,
+          "list_likes": 11,
+          "success": true,
+          "detail_title": "第一部AI电影上院线，重估的是整条影视生产链，附概念股 10月",
+          "body_length": 706,
+          "published_at": "2026-10-24T22:45:00+08:00",
+          "author": "财经小猎豹",
+          "title_matches": false
+        },
+        {
+          "url": "https://www.toutiao.com/w/1879940835117059/",
+          "list_title": "@豆包AI时代的AI系列创作与人绞尽脑汁的创作哪个更有意义?实在令人难以苟同!如果新闻资讯也用AI创作或AI润色,哪天下记者都不就“舒服死了”嘛,何谈“生活在漩涡里”呢? 抖音平台打掉一批又一批AI造假当然大快人心,其实根...",
+          "list_time": "2026-10-24T22:29:58.456778+08:00",
+          "list_comments": 19,
+          "list_likes": 0,
+          "success": true,
+          "detail_title": "@豆包 AI时代的AI系列创作与人绞尽脑汁的创作哪个更有意义？实",
+          "body_length": 203,
+          "published_at": "2026-10-24T22:14:00+08:00",
+          "author": "骑着瘦马走天涯",
+          "title_matches": false
+        },
+        {
+          "url": "https://www.toutiao.com/w/1879944108481795/",
+          "list_title": "看来国家看到了这一点,再这么搞下去,大家都失业了,那谁去购买生产出来的东西呢,大家都没饭吃了,还要AI有何用呢。",
+          "list_time": "2026-10-24T23:29:58.456989+08:00",
+          "list_comments": 0,
+          "list_likes": 0,
+          "success": true,
+          "detail_title": "看来国家看到了这一点，再这么搞下去，大家都失业了，那谁去购买生产",
+          "body_length": 56,
+          "published_at": "2026-10-24T23:06:00+08:00",
+          "author": "清心无尘",
+          "title_matches": false
+        }
+      ],
+      "supported": true,
+      "fields": {
+        "reads": false,
+        "likes": "部分搜索卡片明确显示时可读",
+        "comments": "搜索卡片有显示时可读"
+      },
+      "domain_mode": "keyword_mapping",
+      "candidate_count": 10,
+      "successful_count": 10,
+      "repeat_success": true
+    }
+  },
+  "gate_passed": true
+}

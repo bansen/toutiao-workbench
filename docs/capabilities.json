@@ -1,0 +1,14 @@
+{
+  "checked_date": "2026-10-25",
+  "article": true,
+  "micro": true,
+  "reads": false,
+  "likes": false,
+  "comments": true,
+  "fields": {
+    "article": {"reads": false, "comments": true, "likes": false},
+    "micro": {"reads": false, "comments": true, "likes": true}
+  },
+  "domain_mode": "keyword_mapping",
+  "notes": "文章及微头条各 10 条正文样本通过。阅读量未验证可读；微头条部分搜索布局显示点赞量，文章点赞量未验证。评论量仅在搜索卡片明确显示时记录。领域通过关键词映射，不是全站领域榜单。"
+}

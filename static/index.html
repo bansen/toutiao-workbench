@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>头条 · 内容工作台</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <aside class="rail">
+    <a href="/" class="brand" aria-label="工作台首页">头<span>条</span></a>
+    <div class="rail-label">WORKBENCH</div>
+    <nav aria-label="工作区">
+      <button class="nav-item active" data-tab="materials"><span>▤</span>素材库 <b id="material-count">0</b></button>
+      <button class="nav-item" data-tab="drafts"><span>✎</span>草稿箱 <b id="draft-count">0</b></button>
+      <button class="nav-item" data-tab="tasks"><span>◷</span>任务记录</button>
+    </nav>
+    <div class="rail-bottom"><span class="status-dot"></span> 本地运行<br><small>资料留在你的电脑</small></div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <div><span class="eyebrow">TOUTIAO / CONTENT STUDIO</span><h1>内容工作台<span class="version">V1</span></h1></div>
+      <div class="top-actions">
+        <button id="session-inspect" class="session-inspect"><span id="session-state" class="muted">检查会话</span></button>
+        <button id="session-open" class="button">打开登录窗口 ↗</button>
+        <button id="model-open" class="button">模型设置 <span id="model-dot" class="mini-dot"></span></button>
+      </div>
+    </header>
+    <div class="page-heading"><div><h2 id="page-title">找到值得写的内容。</h2><p id="page-description">从真实资料出发，把选题留给判断，把整理交给工具。</p></div><span class="date-mark" id="today"></span></div>
+    <div id="attention" class="attention" hidden><span>采集已暂停：请在专用浏览器完成登录或验证。</span><button id="resume" class="button">恢复采集</button></div>
+
+    <div class="workspace">
+      <section class="settings-column" aria-label="任务设置">
+        <form id="collection-form" class="panel">
+          <div class="section-heading"><span class="step">01</span><h3>采集条件</h3><span class="quiet-badge">页面实采</span></div>
+          <div class="option-row"><div class="field-label">内容体裁 <small>可多选</small></div>
+          <div class="segmented" role="group" aria-label="内容体裁，可多选"><label><input type="checkbox" name="kind" value="article" checked><span>文章</span></label><label><input type="checkbox" name="kind" value="micro" disabled><span>微头条</span></label></div></div>
+          <div class="option-row"><label class="field-label" for="keyword">关键词</label><input id="keyword" placeholder="例如：AI 工具、职场效率" maxlength="100"></div>
+          <label class="field-label" for="domain">内容领域 <small>可多选 · 关键词映射</small></label><select id="domain" multiple><option value="" selected>不限领域</option></select>
+          <div class="two-fields"><div><label class="field-label" for="hours">发布时间</label><select id="hours"><option value="0">不限时间</option><option value="3">3 小时内</option><option value="12">12 小时内</option><option value="24">1 天内</option><option value="48">2 天内</option><option value="168" selected>7 天内</option></select></div><div><label class="field-label" for="limit">每轮检查上限</label><input id="limit" type="number" value="30" min="1" max="100"></div></div>
+          <label class="field-label" for="reads">阅读量 <small>当前数据源不支持</small></label><select id="reads" disabled><option value="">不限阅读量</option><option>5000+</option><option>1万～5万</option><option>5万～10万</option><option>10万～20万</option><option>20万～50万</option><option>50万+</option></select>
+          <label class="field-label" for="sort">结果排序</label><select id="sort"><option value="published_at">发布时间</option><option value="comments">评论量</option><option value="reads" disabled>阅读量 · 暂不可用</option><option value="likes" disabled>点赞量 · 暂不可用</option></select>
+          <p class="field-note">只筛选实际发现的结果，不代表全站热门榜。缺失指标显示“未知”。</p>
+          <div class="form-actions"><button class="button primary grow" id="collect-start" type="submit">开始采集 <span>→</span></button><button class="button" type="button" id="import-open">导入链接</button></div>
+        </form>
+
+        <section class="panel" aria-labelledby="generation-title">
+          <div class="section-heading"><span class="step">02</span><h3 id="generation-title">草稿设置</h3></div>
+          <label class="field-label" for="mode">生成方式</label><select id="mode"><option value="single">单篇改写</option><option value="multi">多来源成稿 · 选择 2～5 篇</option></select>
+          <label class="field-label" for="style">表达风格 <small>可多选 · 分别成稿</small></label><select id="style" multiple><option selected>口语化</option><option>正式</option><option>自媒体叙述</option><option>新闻式表达</option></select>
+          <div class="two-fields"><div><label class="field-label" for="degree">改写程度</label><select id="degree"><option>轻</option><option selected>中</option><option>深</option></select></div><div><label class="field-label" for="length">目标长度</label><select id="length"><option>接近原文</option><option>精简</option><option value="300">300 字</option><option value="500" selected>500 字</option><option value="800">800 字</option></select></div></div>
+          <label class="field-label" for="versions">每种风格版本数</label><select id="versions"><option value="1">1 版</option><option value="2">2 版</option><option value="3">3 版</option></select>
+          <div class="option-row"><label class="field-label" for="notes">你的观点与真实经历</label><textarea id="notes" rows="2" maxlength="10000" placeholder="补充你想表达的观点、亲身体验或希望核对的问题…"></textarea></div>
+          <p class="field-note">改写程度只调整表达与结构，不表示原创认证。发布前请核实事实和 AI 声明。</p>
+          <button id="generate" class="button ink full">为选中素材生成草稿 <span id="selected-count">0</span></button>
+        </section>
+
+        <section class="panel schedule-panel">
+          <div class="section-heading"><span class="step">03</span><h3>定时任务</h3></div>
+          <label class="check-line"><input type="checkbox" id="schedule-enabled">开启定时采集</label>
+          <select id="schedule-minutes" aria-label="采集间隔"><option value="30">每 30 分钟</option><option value="60">每 1 小时</option><option value="180">每 3 小时</option></select>
+          <label class="check-line"><input type="checkbox" id="auto-generate">新增素材自动成稿</label>
+          <p class="field-note">每轮最多为 3 篇新增素材成稿，仅支持单篇模式。电脑和程序运行时生效；错过不补跑。</p>
+          <p id="schedule-state" class="schedule-state">定时已关闭</p>
+          <button id="save-settings" class="button full">保存设置与定时条件</button>
+        </section>
+      </section>
+
+      <section class="content-column">
+        <section id="materials-view" class="view panel results-panel">
+          <div class="results-heading"><div><span class="eyebrow">SOURCE LIBRARY</span><h3>素材库 <span id="result-total" class="count-chip">0</span></h3></div><div class="table-tools"><input id="library-query" placeholder="搜索已保存素材" aria-label="搜索素材"><button class="button" id="refresh-materials">刷新</button></div></div>
+          <div class="results-caption"><span id="collection-progress">准备就绪，设置关键词开始采集</span><span id="unknown-count"></span></div>
+          <div class="table-scroll"><table><thead><tr><th><input type="checkbox" id="select-all" aria-label="全选素材"></th><th>标题与来源</th><th>阅读</th><th>评论</th><th>点赞</th><th>发布时间</th><th></th></tr></thead><tbody id="materials-body"></tbody></table></div>
+          <div id="materials-empty" class="empty-state"><div class="empty-symbol">▤</div><h4>下一篇好内容，从这里开始</h4><p>设置关键词采集，或导入一篇头条文章链接。<br>原文与来源会一并保存，方便写作时核对。</p><button class="button" id="empty-import">导入第一篇文章 ↗</button></div>
+          <div class="table-footer">数据来自可见页面 · 缺失指标显示未知 · 未知值排在末尾</div>
+        </section>
+
+        <section id="drafts-view" class="view panel" hidden>
+          <div class="results-heading"><div><span class="eyebrow">DRAFT ROOM</span><h3>草稿箱</h3></div><button class="button" id="refresh-drafts">刷新</button></div>
+          <div id="draft-list" class="draft-grid"></div><div class="empty-state" id="drafts-empty"><div class="empty-symbol">✎</div><h4>留一个空间，给你的表达</h4><p>在素材库选择文章，生成单篇或多来源草稿。</p></div>
+        </section>
+
+        <section id="tasks-view" class="view panel" hidden>
+          <div class="results-heading"><div><span class="eyebrow">ACTIVITY LOG</span><h3>任务记录</h3></div><button class="button" id="refresh-tasks">刷新</button></div>
+          <div id="task-list"></div><div id="tasks-empty" class="empty-state"><div class="empty-symbol">◷</div><h4>还没有任务</h4><p>采集和生成的进度、失败原因都会记录在这里。</p></div>
+        </section>
+
+        <section class="source-note"><span class="note-symbol">i</span><div><strong>每一项数据，都有来处。</strong><p>文章、微头条正文已通过页面验证。领域是关键词映射，阅读量当前不可读。来源与待核实事项会保留在草稿中。</p></div><span class="quiet-badge">2026.10.25 验证</span></section>
+      </section>
+    </div>
+    <footer>头条内容工作台 <span>LOCAL FIRST / HUMAN EDITED</span></footer>
+  </main>
+
+  <dialog id="import-dialog"><div class="dialog-heading"><h3>导入头条内容</h3><button class="icon-button" data-close="import-dialog" aria-label="关闭">×</button></div><p class="muted">每行一个文章或微头条链接，最多 30 个。导入不受采集筛选条件限制。</p><textarea id="import-urls" rows="7" placeholder="https://www.toutiao.com/article/…/ 或 https://www.toutiao.com/w/…/"></textarea><button id="import-submit" class="button primary full">读取原文并保存</button></dialog>
+  <dialog id="model-dialog"><div class="dialog-heading"><h3>模型配置</h3><button class="icon-button" data-close="model-dialog" aria-label="关闭">×</button></div><p id="model-state"></p><p>在项目目录复制 <code>.env.example</code> 为 <code>.env</code>，填写以下配置后重启工具：</p><pre>LLM_BASE_URL=https://你的服务地址/v1
+LLM_API_KEY=你的密钥
+LLM_MODEL=模型名称</pre><p class="field-note">Base URL 填服务前缀，不包含 /chat/completions。密钥只保存在本地，不会返回网页。连接测试会发起一次小型模型请求。</p><button id="model-test" class="button ink full">测试模型连接</button></dialog>
+  <dialog id="session-dialog"><div class="dialog-heading"><h3>专用浏览器会话</h3><button class="icon-button" data-close="session-dialog" aria-label="关闭">×</button></div><p id="session-detail">正在检查…</p><p class="field-note">登录在本机专用 Chrome 配置中完成，不读取你平时的浏览器资料。浏览器可用不代表账号已登录，请在窗口内确认。</p><div class="dialog-actions"><button id="session-check" class="button">检查状态</button><button id="session-clear" class="button">清除专用登录会话</button></div></dialog>
+  <dialog id="source-dialog" class="wide-dialog"><div class="dialog-heading"><h3 id="source-title">原文</h3><button class="icon-button" data-close="source-dialog" aria-label="关闭">×</button></div><p id="source-meta" class="muted"></p><a id="source-link" target="_blank" rel="noopener noreferrer">打开来源 ↗</a><div id="source-body" class="source-body"></div></dialog>
+  <dialog id="draft-dialog" class="wide-dialog"><div class="dialog-heading"><h3>编辑草稿 <span id="dirty-mark"></span></h3><button class="icon-button" id="draft-close" aria-label="关闭">×</button></div><label class="field-label" for="draft-title">标题</label><input id="draft-title" maxlength="300"><label class="field-label" for="draft-body">正文</label><textarea id="draft-body" rows="16"></textarea><label class="field-label" for="draft-verify">待核实事项 · 每行一项</label><textarea id="draft-verify" rows="3"></textarea><div id="draft-sources" class="draft-sources"></div><p id="draft-meta" class="muted"></p><div class="dialog-actions"><button id="draft-save" class="button primary">保存修改</button><button id="draft-copy" class="button">复制正文</button><button id="draft-export-md" class="button">导出 Markdown</button><button id="draft-export-txt" class="button">导出纯文本</button></div></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
