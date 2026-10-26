@@ -4,7 +4,7 @@
 
 ## 启动
 
-需要 Python 3.11+ 和已安装的 Google Chrome。已在 macOS、Python 3.13 和 Chrome 下验证；Windows 安装包尚未制作。
+需要 Python 3.11+ 和已安装的 Google Chrome。
 
 项目仓库：[bansen/toutiao-workbench](https://github.com/bansen/toutiao-workbench)。功能范围、当前状态和后续分发方式见 [项目说明与部署方案](docs/项目说明与部署方案.md)。
 
