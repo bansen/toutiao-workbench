@@ -36,7 +36,11 @@ python -m workbench
 
 ## 模型配置
 
-采集不要求配置模型。生成草稿前：
+采集不要求配置模型。生成草稿前，点击网页右上角“模型设置”，填写 Base URL、API Key 和模型名，保存后即时生效。API Key 输入框留空会保留已保存的密钥，保存或关闭弹窗后清空输入；密钥不会回显。
+
+网页配置保存在本地 `data/model.env`（仅当前用户可读写），优先于项目 `.env` 和进程环境变量。连接测试会调用模型并消耗少量额度。
+
+也可继续使用项目环境文件：
 
 ```bash
 cp .env.example .env
@@ -84,7 +88,8 @@ LLM_MODEL=模型名称
 | 素材、草稿、任务、设置 | `data/workbench.db` |
 | 专用 Chrome 会话 | `data/browser/` |
 | 采集验证记录 | `data/probe*/probe.json` |
-| 本地密钥 | `.env` |
+| 网页保存的模型配置 | `data/model.env` |
+| 可选环境配置 | `.env` |
 
 退出程序后备份 `data/workbench.db`。清除浏览器会话不影响素材和草稿。恢复数据库时先停止工具。`.env`、整个 `data/` 和浏览器测试截图已加入 `.gitignore`。
 
@@ -142,6 +147,7 @@ python -m workbench.probe --kind micro --visible --output data/probe-micro
 | 恢复采集 / 定时 | `POST /api/tasks/resume`、`PUT /api/schedule` |
 | 素材列表 / 原文 | `GET /api/materials`、`GET /api/materials/{id}` |
 | 草稿列表 / 查询 / 编辑 / 导出 | `GET /api/drafts`、`GET/PUT /api/drafts/{id}`、`GET /api/drafts/{id}/export?format=md` |
+| 读取 / 保存模型配置 | `GET/PUT /api/model/config` |
 | 保存偏好 / 模型连接测试 | `POST /api/preferences`、`POST /api/model/test` |
 
 网页入口和业务 API 独立；采集器、模型适配器、任务引擎和 SQLite 存储分别位于 `workbench/` 对应模块中。

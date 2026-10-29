@@ -94,9 +94,22 @@
   </main>
 
   <dialog id="import-dialog"><div class="dialog-heading"><h3>导入头条内容</h3><button class="icon-button" data-close="import-dialog" aria-label="关闭">×</button></div><p class="muted">每行一个文章或微头条链接，最多 30 个。导入不受采集筛选条件限制。</p><textarea id="import-urls" rows="7" placeholder="https://www.toutiao.com/article/…/ 或 https://www.toutiao.com/w/…/"></textarea><button id="import-submit" class="button primary full">读取原文并保存</button></dialog>
-  <dialog id="model-dialog"><div class="dialog-heading"><h3>模型配置</h3><button class="icon-button" data-close="model-dialog" aria-label="关闭">×</button></div><p id="model-state"></p><p>在项目目录复制 <code>.env.example</code> 为 <code>.env</code>，填写以下配置后重启工具：</p><pre>LLM_BASE_URL=https://你的服务地址/v1
-LLM_API_KEY=你的密钥
-LLM_MODEL=模型名称</pre><p class="field-note">Base URL 填服务前缀，不包含 /chat/completions。密钥只保存在本地，不会返回网页。连接测试会发起一次小型模型请求。</p><button id="model-test" class="button ink full">测试模型连接</button></dialog>
+  <dialog id="model-dialog" aria-labelledby="model-heading">
+    <div class="dialog-heading"><h3 id="model-heading">模型配置</h3><button class="icon-button" data-close="model-dialog" aria-label="关闭">×</button></div>
+    <p id="model-state"></p>
+    <form id="model-form">
+      <label class="field-label" for="model-base-url">Base URL</label>
+      <input id="model-base-url" type="url" required placeholder="https://你的服务地址/v1" autocomplete="off" spellcheck="false">
+      <label class="field-label" for="model-api-key">API Key <small id="model-key-state">尚未保存密钥</small></label>
+      <input id="model-api-key" type="password" placeholder="填写服务商提供的 API Key" autocomplete="off" spellcheck="false" aria-describedby="model-config-note">
+      <label class="field-label" for="model-name">模型名称</label>
+      <input id="model-name" required placeholder="填写服务商提供的模型名称" autocomplete="off" spellcheck="false">
+      <p id="model-config-note" class="field-note">Base URL 填服务前缀，不包含 /chat/completions。密钥只保存在本机，不会返回网页；留空会保留已保存的密钥。</p>
+      <p id="model-feedback" class="muted" role="status" aria-live="polite"></p>
+      <div class="dialog-actions"><button id="model-save" type="submit" class="button primary grow">保存配置</button><button id="model-test" type="button" class="button ink grow">测试模型连接</button></div>
+      <p class="field-note">测试使用已保存的配置，会调用服务商 API 并可能产生少量费用。修改后请先保存，再测试。</p>
+    </form>
+  </dialog>
   <dialog id="session-dialog"><div class="dialog-heading"><h3>专用浏览器会话</h3><button class="icon-button" data-close="session-dialog" aria-label="关闭">×</button></div><p id="session-detail">正在检查…</p><p class="field-note">登录在本机专用 Chrome 配置中完成，不读取你平时的浏览器资料。浏览器可用不代表账号已登录，请在窗口内确认。</p><div class="dialog-actions"><button id="session-check" class="button">检查状态</button><button id="session-clear" class="button">清除专用登录会话</button></div></dialog>
   <dialog id="source-dialog" class="wide-dialog"><div class="dialog-heading"><h3 id="source-title">原文</h3><button class="icon-button" data-close="source-dialog" aria-label="关闭">×</button></div><p id="source-meta" class="muted"></p><a id="source-link" target="_blank" rel="noopener noreferrer">打开来源 ↗</a><div id="source-body" class="source-body"></div></dialog>
   <dialog id="draft-dialog" class="wide-dialog"><div class="dialog-heading"><h3>编辑草稿 <span id="dirty-mark"></span></h3><button class="icon-button" id="draft-close" aria-label="关闭">×</button></div><label class="field-label" for="draft-title">标题</label><input id="draft-title" maxlength="300"><label class="field-label" for="draft-body">正文</label><textarea id="draft-body" rows="16"></textarea><label class="field-label" for="draft-verify">待核实事项 · 每行一项</label><textarea id="draft-verify" rows="3"></textarea><div id="draft-sources" class="draft-sources"></div><p id="draft-meta" class="muted"></p><div class="dialog-actions"><button id="draft-save" class="button primary">保存修改</button><button id="draft-copy" class="button">复制正文</button><button id="draft-export-md" class="button">导出 Markdown</button><button id="draft-export-txt" class="button">导出纯文本</button></div></dialog>

@@ -7,12 +7,14 @@ from typing import Literal
 
 from dotenv import load_dotenv
 from fastapi import FastAPI,HTTPException,Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse,JSONResponse,Response
 from fastapi.staticfiles import StaticFiles
 
 from .browser import Browser
 from .engine import Engine
 from .llm import LLM
+from .model_config import ModelConfig,load_model_values,save_model_values
 from .parsing import select_items
 from .schemas import Collection,DOMAINS,DraftEdit,GenerateRequest,Generation,ImportRequest,Schedule
 from .store import Store
@@ -28,7 +30,7 @@ def create_app(data_dir=None,browser=None,llm=None):
     store=Store(data_dir/'workbench.db')
     caps=json.loads((ROOT/'docs/capabilities.json').read_text())
     browser=browser or Browser(data_dir/'browser')
-    llm=llm or LLM(os.environ.get('LLM_BASE_URL',''),os.environ.get('LLM_API_KEY',''),os.environ.get('LLM_MODEL',''))
+    llm=llm or LLM(*load_model_values(ROOT,data_dir))
     engine=Engine(store,browser,llm,caps)
 
     @asynccontextmanager
@@ -53,6 +55,10 @@ def create_app(data_dir=None,browser=None,llm=None):
         response.headers['Content-Security-Policy']="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         response.headers['Cache-Control']='no-store'
         return response
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request,exc):
+        return JSONResponse({'detail':[{'loc':list(e['loc']),'msg':e['msg'],'type':e['type']} for e in exc.errors()]},status_code=422)
 
     @app.exception_handler(ValueError)
     async def bad_value(request,exc):
@@ -173,6 +179,24 @@ def create_app(data_dir=None,browser=None,llm=None):
         for identity in options.ids:
             store.material(identity)
         return engine.submit('generate',options.model_dump())
+
+    def model_config_status():
+        return {**llm.status(),'base_url':getattr(llm,'base_url','')}
+
+    @app.get('/api/model/config')
+    async def model_config():
+        return model_config_status()
+
+    @app.put('/api/model/config')
+    async def save_model_config(options:ModelConfig):
+        if engine.active_id or llm.lock.locked():
+            raise HTTPException(409,'请等待当前采集或模型任务结束后修改配置')
+        key=options.api_key or getattr(llm,'api_key','')
+        if not key:
+            raise HTTPException(422,'首次配置需要填写 API Key')
+        save_model_values(data_dir,options,key)
+        llm.base_url,llm.api_key,llm.model=options.base_url,key,options.model
+        return model_config_status()
 
     @app.post('/api/model/test')
     async def model_test():

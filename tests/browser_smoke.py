@@ -133,11 +133,25 @@ async def main():
                     await page.locator('#session-inspect').click()
                     await page.locator('#session-detail').filter(has_text='未启动').wait_for()
                     await page.locator('[data-close="session-dialog"]').click()
+                    await page.goto('http://127.0.0.1:8766/#model')
+                    await page.locator('#model-dialog[open]').wait_for()
+                    await page.locator('#model-base-url').fill('https://model-config-test.invalid/v1')
+                    await page.locator('#model-api-key').fill('browser-fixture-key')
+                    await page.locator('#model-name').fill('saved-test-model')
+                    await page.locator('#model-save').click()
+                    await page.locator('#model-feedback').filter(has_text='已保存').wait_for()
+                    assert await page.locator('#model-api-key').input_value()==''
+                    config=await (await page.request.get('http://127.0.0.1:8766/api/model/config')).json()
+                    assert config['key_set'] and config['model']=='saved-test-model' and 'api_key' not in config
+                    assert await page.evaluate('localStorage.length')==0
+                    await page.locator('#model-api-key').fill('discard-on-close')
+                    await page.locator('[data-close="model-dialog"]').click()
+                    assert await page.locator('#model-api-key').input_value()==''
                     output=Path(__file__).resolve().parent.parent/'output/playwright'
                     output.mkdir(parents=True,exist_ok=True)
                     await page.screenshot(path=str(output/'drafts-test.png'),full_page=True)
                     assert not errors, errors
-                    print('PASS: multi-select toggling/persistence; two styles × versions; single/multi-source; edit; clipboard; MD/TXT download; SQLite reopen; no JS errors.')
+                    print('PASS: multi-select toggling/persistence; two styles × versions; single/multi-source; edit; clipboard; MD/TXT download; SQLite reopen; model configuration key clearing/privacy; no JS errors.')
                 finally:
                     await browser.close()
         finally:

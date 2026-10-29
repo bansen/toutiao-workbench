@@ -1,4 +1,4 @@
-/* The server keeps secrets. This page only receives configuration status. */
+/* Saved secrets stay on the server; the page never receives the saved API key. */
 const $ = id => document.getElementById(id);
 const state = {tab:'materials', selected:new Set(), materials:[], drafts:[], tasks:[], status:null, editing:null, dirty:false};
 const statusNames = {waiting:'等待中',running:'运行中',attention:'待人工处理',success:'成功',partial:'部分失败',failed:'失败',stopped:'已停止'};
@@ -276,8 +276,47 @@ act('import-submit',async()=>{
   if (!urls.length) throw new Error('请先粘贴文章链接');
   await api('/api/tasks/import','POST',{urls});$('import-dialog').close();toast('链接导入任务已加入队列');await refreshAll();
 });
-act('model-open',()=>{$('model-dialog').showModal();});
-act('model-test',async()=>{await api('/api/model/test','POST');toast('模型连接与 JSON 输出测试通过');});
+function applyModelConfig(config) {
+  $('model-base-url').value=config.base_url||'';
+  $('model-name').value=config.model||'';
+  $('model-key-state').textContent=config.key_set?'已保存 · 留空保留':'尚未保存密钥';
+  $('model-api-key').placeholder=config.key_set?'留空保留已保存密钥':'填写服务商提供的 API Key';
+  $('model-dot').classList.toggle('ready',config.configured);
+  $('model-state').textContent=config.configured?`当前模型：${config.model} · 已配置密钥`:'模型尚未配置。可以先采集素材，配置后再生成。';
+}
+function modelBusy(busy) {
+  for(const id of ['model-base-url','model-api-key','model-name','model-save','model-test'])$(id).disabled=busy;
+}
+act('model-open',async()=>{
+  $('model-api-key').value='';
+  $('model-feedback').textContent='正在读取本机配置…';
+  modelBusy(true);$('model-dialog').showModal();
+  try {applyModelConfig(await api('/api/model/config'));$('model-feedback').textContent='';}
+  catch(error){$('model-feedback').textContent='配置读取失败，请关闭后重试。';throw error;}
+  finally {modelBusy(false);}
+});
+$('model-form').addEventListener('submit',async event=>{
+  event.preventDefault();modelBusy(true);$('model-feedback').textContent='正在保存…';
+  try {
+    const config=await api('/api/model/config','PUT',{
+      base_url:$('model-base-url').value.trim(),api_key:$('model-api-key').value,model:$('model-name').value.trim()
+    });
+    $('model-api-key').value='';applyModelConfig(config);
+    $('model-feedback').textContent=config.configured?'配置已保存，可测试连接或生成草稿。':'配置已保存，请填写 API Key 后再测试。';
+    toast('模型配置已保存');
+  } catch(error){$('model-feedback').textContent='保存失败，请检查配置后重试。';toast(error.message,true);}
+  finally {modelBusy(false);}
+});
+function clearModelKey(){ $('model-api-key').value=''; }
+$('model-dialog').addEventListener('close',clearModelKey);
+$('model-dialog').addEventListener('cancel',clearModelKey);
+document.querySelector('[data-close="model-dialog"]').addEventListener('click',clearModelKey);
+act('model-test',async()=>{
+  $('model-save').disabled=true;$('model-feedback').textContent='正在测试已保存的模型配置…';
+  try {await api('/api/model/test','POST');$('model-feedback').textContent='模型连接与 JSON 输出测试通过。';toast('模型连接与 JSON 输出测试通过');}
+  catch(error){$('model-feedback').textContent='模型测试失败，请检查已保存的配置。';throw error;}
+  finally {$('model-save').disabled=false;}
+});
 act('session-open',async()=>{const result=await api('/api/session/open','POST');toast(result.message);$('session-state').textContent='请在专用 Chrome 中登录';});
 async function checkSession(){const result=await api('/api/session');$('session-detail').textContent=result.status+'。'+(result.message||'');}
 act('session-inspect',async()=>{$('session-dialog').showModal();await checkSession();});
@@ -336,3 +375,9 @@ setInterval(async()=>{
   }catch(error){$('session-state').textContent='本地服务连接中断';}
   finally{polling=false;}
 },4000);
+
+function openModelFromHash(){
+  if(window.location.hash==='#model' && !$('model-dialog').open) $('model-open').click();
+}
+window.addEventListener('hashchange',openModelFromHash);
+openModelFromHash();
