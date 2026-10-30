@@ -2,6 +2,7 @@
 import asyncio
 import re
 from datetime import datetime
+from urllib.parse import urljoin, urlsplit
 
 from .browser import NeedsAttention
 from .parsing import canonical_url,parse_time
@@ -45,6 +46,25 @@ def platform_status(text):
     if '已发布' in text:return 'published'
     if any(v in text for v in ('审核中','审核通过','发布中','已提交')):return 'submitted'
     return 'uncertain'
+
+
+def identity_from_links(links):
+    identities={}
+    for link in links:
+        if not link.get('visible'):
+            continue
+        parsed=urlsplit(urljoin('https://mp.toutiao.com',link.get('href') or ''))
+        match=re.fullmatch(r'/c/user/(\d+)/?',parsed.path)
+        if parsed.scheme not in ('http','https') or parsed.hostname not in ('toutiao.com','www.toutiao.com') or parsed.username or not match:
+            continue
+        identity=match[1]
+        identities[identity]=identities.get(identity) or (link.get('text') or '').strip()
+    if not identities:
+        raise NeedsAttention('账号入口未加载或不可识别（有效账号ID数为0），请检查登录页面')
+    if len(identities)!=1:
+        raise NeedsAttention('页面账号标识冲突（不同账号ID数为'+str(len(identities))+'），已暂停')
+    identity,name=next(iter(identities.items()))
+    return {'id':identity,'name':name or '头条账号 '+identity[-6:]}
 
 
 class ToutiaoPublisher:
@@ -95,29 +115,38 @@ class ToutiaoPublisher:
             await self.close()
             raise
 
+    async def _identity(self):
+        await self.browser.check_blocking_ui(self.page)
+        try:
+            await self.page.wait_for_function(r"""() => [...document.querySelectorAll('a[href*="/c/user/"]')].some(a => {
+                const url=new URL(a.href);
+                return a.getClientRects().length && ['www.toutiao.com','toutiao.com'].includes(url.hostname)
+                    && /^\/c\/user\/\d+\/?$/.test(url.pathname);
+            })""",timeout=8000)
+        except Exception:
+            await self.browser.check_blocking_ui(self.page)
+            raise NeedsAttention('等待账号入口超时，尚未点击发布，请检查登录页面') from None
+        links=await self.page.locator('a[href*="/c/user/"]').evaluate_all(
+            '(els)=>els.map(e=>({href:e.getAttribute("href"),text:e.innerText,visible:!!e.getClientRects().length}))')
+        return identity_from_links(links)
+
     async def identify(self):
         try:
             await self._open(CREATE,EDITOR,check_account=False)
-            await self.browser.check_blocking_ui(self.page)
-            links=self.page.locator('a[href*="/c/user/"]')
-            if await links.count()!=1:raise NeedsAttention('无法唯一识别登录账号')
-            match=re.search(r'/c/user/(\d+)/',await links.get_attribute('href') or '')
-            if not match:raise NeedsAttention('当前账号主页链接不可识别')
-            if self.account_id() and match[1]!=self.account_id():raise NeedsAttention('当前登录账号与绑定账号不一致，不自动更换绑定')
-            return {'id':match[1],'name':(await links.inner_text()).strip() or '头条账号 '+match[1][-6:]}
+            identity=await self._identity()
+            if self.account_id() and identity['id']!=self.account_id():
+                raise NeedsAttention('当前登录账号与绑定账号不一致，不自动更换绑定')
+            return identity
         finally:await self.close()
 
     async def check_account(self):
-        await self.browser.check_blocking_ui(self.page)
-        links=self.page.locator('a[href*="/c/user/"]')
-        if await links.count()!=1:raise NeedsAttention('无法唯一识别当前头条账号，请人工登录核实')
-        match=re.search(r'/c/user/(\d+)/',await links.get_attribute('href') or '')
-        if not match or match[1]!=self.account_id():raise NeedsAttention('当前头条账号与绑定账号不一致，已暂停')
+        identity=await self._identity()
+        if identity['id']!=self.account_id():raise NeedsAttention('当前头条账号与绑定账号不一致，已暂停')
         text=await self.page.locator('body').inner_text()
         # Administrative UI only; source article text is never used here.
         for marker in ('今日发文次数已达上限','发文数量已达上限','发布频繁','暂时无法发布','账号被封禁','发文功能受限'):
             if marker in text:raise NeedsAttention('平台发文限制：'+marker)
-        return match[1]
+        return identity['id']
 
     def label(self,name):
         return self.page.locator('label').filter(has=self.page.get_by_text(name,exact=True))

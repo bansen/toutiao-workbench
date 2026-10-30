@@ -101,3 +101,32 @@ class PublisherDeclarationTests(unittest.IsolatedAsyncioTestCase):
         result=await publisher.declarations(apply=True)
         self.assertFalse(result['exclusive']['checked'])
         labels['头条首发'].get_by_text.return_value.click.assert_awaited_once()
+
+class PublisherIdentityTests(unittest.IsolatedAsyncioTestCase):
+    def test_duplicate_links_for_same_bound_account_are_one_identity(self):
+        from workbench.toutiao_publisher import identity_from_links
+        result=identity_from_links([
+            {'href':'//www.toutiao.com/c/user/123/?enter_from=mp','text':'账号','visible':True},
+            {'href':'https://www.toutiao.com/c/user/123/','text':'','visible':True}])
+        self.assertEqual(result['id'],'123')
+
+    def test_conflicting_or_foreign_links_never_identify_account(self):
+        from workbench.toutiao_publisher import identity_from_links
+        from workbench.browser import NeedsAttention
+        for links in ([{'href':'https://evil.test/c/user/123/','visible':True}],
+                      [{'href':'//www.toutiao.com/c/user/123/','visible':True}, {'href':'//www.toutiao.com/c/user/456/','visible':True}]):
+            with self.assertRaises(NeedsAttention):identity_from_links(links)
+
+    async def test_account_loading_waits_before_reading_identity(self):
+        from unittest.mock import Mock,AsyncMock
+        from workbench.toutiao_publisher import ToutiaoPublisher
+        browser=Mock();browser.check_blocking_ui=AsyncMock()
+        publisher=ToutiaoPublisher(browser,lambda:'123')
+        page=Mock();page.wait_for_function=AsyncMock()
+        links=Mock();links.count=AsyncMock(return_value=0)
+        links.evaluate_all=AsyncMock(return_value=[{'href':'//www.toutiao.com/c/user/123/','text':'','visible':True}])
+        body=Mock();body.inner_text=AsyncMock(return_value='创作者后台')
+        page.locator.side_effect=lambda selector:links if selector.startswith('a[') else body
+        publisher.page=page
+        self.assertEqual(await publisher.check_account(),'123')
+        page.wait_for_function.assert_awaited_once()
