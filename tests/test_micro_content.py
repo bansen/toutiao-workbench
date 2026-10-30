@@ -37,3 +37,29 @@ class MicroContentTests(unittest.IsolatedAsyncioTestCase):
     async def test_empty_or_overlong_generated_body_rejected(self):
         for body in ['', '文'*1001]:
             with self.assertRaises(ValueError):await self.service({'title':'标题','body':body,'verify':[]}).generate([SOURCE],'科技')
+
+    async def test_revision_removes_unsupported_details_but_keeps_audit_for_check(self):
+        results=[{'title':'机器人展示','body':'机器人售价999元。','verify':['来源没有售价']},
+                 {'title':'机器人展示','body':'甲公司展示配送机器人，售价尚未公布。','verify':[]},
+                 {'passed':True,'issues':[]}]
+        calls=[]
+        async def respond(req):
+            calls.append(json.loads(req.content))
+            return httpx.Response(200,json={'choices':[{'message':{'content':json.dumps(results.pop(0),ensure_ascii=False)}}]})
+        service=MicroContent(LLM('https://model.test/v1','key','test',transport=httpx.MockTransport(respond)))
+        draft=await service.generate([SOURCE],'科技')
+        self.assertNotIn('999',draft['body'])
+        self.assertEqual(draft['editorial_review'],['来源没有售价'])
+        self.assertTrue((await service.check(draft,[SOURCE],'科技'))['passed'])
+        self.assertIn('editorial_review',calls[-1]['messages'][1]['content'])
+
+    async def test_failed_revision_keeps_original_unresolved_items(self):
+        counter=0
+        async def respond(req):
+            nonlocal counter
+            counter+=1
+            if counter==1:return httpx.Response(200,json={'choices':[{'message':{'content':'{"title":"标题","body":"仍有疑点的稿件","verify":["关键事实待核实"]}'}}]})
+            return httpx.Response(400)
+        service=MicroContent(LLM('https://model.test/v1','key','test',transport=httpx.MockTransport(respond)))
+        draft=await service.generate([SOURCE],'科技')
+        self.assertIn('关键事实待核实',draft['verify'])

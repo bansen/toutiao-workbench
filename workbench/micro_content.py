@@ -31,12 +31,27 @@ class MicroContent:
             raise ValueError('微头条正文为空、过长或返回格式不正确')
         verify=result.get('verify')
         if not isinstance(verify,list) or not all(isinstance(v,str) for v in verify):raise ValueError('待核实事项格式错误')
+        editorial_review=list(verify)
+        if verify:
+            try:
+                revised=await self.request(
+                    '对微头条作一次有来源约束的删改。删除待核实事项涉及的无支持引语、数据、传闻、效果和虚构亲历，不能只清空verify或换种说法保留原断言。'
+                    '只有删除问题内容后仍有来源支持的具体事件，才能返回无待核实事项的稿件；关键事件本身存疑就保留verify，不凑稿。'
+                    '语气口语化，约300字，资料少就简短，事实要清楚归属于来源。返回{"title":"内部标题","body":"修订正文","verify":["仍待核实事项"]}。',
+                    {'topic':topic,'sources':sources,'draft':result,'issues':verify})
+                if (isinstance(revised,dict) and isinstance(revised.get('title'),str) and revised['title'].strip()
+                    and isinstance(revised.get('body'),str) and 1<=len(revised['body'].strip())<=1000
+                    and isinstance(revised.get('verify'),list) and all(isinstance(v,str) for v in revised['verify'])):
+                    result,verify=revised,revised['verify']
+            except Exception:
+                pass # The original non-empty verify list still blocks automatic submission.
         body=result['body'].strip()
         authors=list(dict.fromkeys(s.get('author') or s.get('title','来源原文') for s in sources))
         if '\n来源：' in body:body=body.split('\n来源：',1)[0].rstrip()
         body+='\n\n来源：'+'；'.join(authors)
         return {'title':result['title'].strip(),'body':body,'verify':verify,'model':self.llm.model,
                 'sources':[{k:s.get(k,'') for k in ('id','title','url','author','published_at')} for s in sources],
+                'editorial_review':editorial_review,
                 'options':{'mode':'single' if len(sources)==1 else 'multi','format':'micro','topic':topic,'length':'300','style':'口语化','versions':1}}
 
     async def check(self,draft,sources,topic):
@@ -45,7 +60,8 @@ class MicroContent:
         result=await self.request(
             '检查候选微头条是否适合发布：每个事实、日期、数字、引语必须有提供的正文支持；来源链接仅供记录，不能假定链接内容。'
             '确认主题属于指定方向，没有虚构亲历、矛盾或未经支持的断言。比较最初资料和刚重新读取的资料，若出现新进展、冲突或正文不可见，判定不通过，留给人工处理。'
-            '观点必须明确为观点，不以观点替代事实。没有足够证据就不通过。模型检查不保证真实。'
+            '观点必须明确为观点，不以观点替代事实。必须存在有来源支持的具体事件，不能用泛泛议论凑稿。没有足够证据就不通过。模型检查不保证真实。'
+            'editorial_review记录先前的核实问题，若相关问题断言仍在正文中，必须不通过；只有已删除且剩余事件有支持时才可通过。'
             '返回{"passed":true或false,"issues":["具体问题"]}。只有无任何问题才允许passed=true。',
             {'topic':topic,'draft':draft,'sources':sources})
         valid=isinstance(result,dict) and result.get('passed') is True and result.get('issues')==[]

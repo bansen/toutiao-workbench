@@ -313,7 +313,7 @@ class MicroRuntime:
                 self.plans.update_slot(slot['id'], {'status': 'skipped', 'reason': '草稿已编辑'})
                 return
             sources = await self._refresh(draft, priority=True)
-            check = await self.content.check({**row, 'source_snapshots': draft.get('source_snapshots', [])}, sources, row['topic'])
+            check = await self.content.check({**row, 'source_snapshots': draft.get('source_snapshots', []), 'editorial_review':draft.get('editorial_review', [])}, sources, row['topic'])
             if check.get('passed') is not True:
                 self.queue.update(row['id'], {'status': 'failed', 'reason': '发布前来源检查未通过'})
                 self.plans.update_slot(slot['id'], {'status': 'skipped', 'reason': '发布前来源检查未通过'})
@@ -450,7 +450,7 @@ class MicroRuntime:
             if any(draft.get(k) != row.get(k) for k in ('title', 'body', 'sources', 'verify')) or draft.get('verify'):
                 raise ValueError('草稿已编辑或仍有待核实事项，旧快照不可确认')
             refreshed = await self._refresh(draft)
-            result = await self.content.check({**row, 'source_snapshots': draft.get('source_snapshots', [])}, refreshed, row['topic'])
+            result = await self.content.check({**row, 'source_snapshots': draft.get('source_snapshots', []), 'editorial_review':draft.get('editorial_review', [])}, refreshed, row['topic'])
             verdict = await self.guard.inspect(row, self._account())
             if result.get('passed') is not True or verdict.get('decision') != 'clear':
                 raise ValueError('来源、事实或事件查重检查未通过')
