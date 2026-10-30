@@ -84,6 +84,16 @@ class PublicationGuardTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(NeedsAttention): await self.guard.send(draft(),'account','not-approved',callback,callback)
         self.assertEqual(self.ledger.records('account'),[])
 
+    async def test_external_link_stops_before_browser_or_reservation_but_sources_stay_valid(self):
+        candidate=draft('工具说明，请访问 dify.ai 查看入口。')
+        async def callback(item):self.fail('正文含外链时不应打开编辑器或提交')
+        result=await self.guard.inspect(candidate,'account')
+        self.assertEqual(result['decision'],'review')
+        with self.assertRaises(NeedsAttention):
+            await self.guard.send(candidate,'account',hashlib.sha256(candidate['body'].encode()).hexdigest(),callback,callback)
+        self.assertEqual(self.ledger.records('account'),[])
+        self.assertEqual((await self.guard.inspect(draft('打开应用 → 技能页面，选择对应功能。'),'account'))['decision'],'clear')
+
     async def test_selected_first_release_never_submits(self):
         candidate=draft()
         async def preflight(item):

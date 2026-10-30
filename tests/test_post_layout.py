@@ -1,9 +1,21 @@
 import unittest
 
-from workbench.post_layout import format_post, layout_issues
+from workbench.post_layout import format_post, layout_issues, external_link_issues
 
 
 class PostLayoutTests(unittest.TestCase):
+    def test_external_urls_short_links_and_bare_domains_are_rejected(self):
+        for text in ['请访问https://www.workbuddy.cn/docs','官网：www.workbuddy.cn',
+                     '打开 dify.ai 查看','参考 t.cn/AbCd','地址：https：//example.com',
+                     '[官网](https://kimi.com)','[入口](../docs)','文档：docs.dify.ai/zh-hans']:
+            with self.subTest(text=text):
+                self.assertTrue(external_link_issues(text))
+                self.assertTrue(layout_issues('标题\n\n'+text+'\n\n#AI #工具 #科技'))
+
+    def test_file_names_versions_menu_paths_and_backend_sources_are_not_links(self):
+        for text in ['SKILL.md 和 README.md','Python 3.13，版本2.0.1','点击专家·技能·连接器 → 技能',
+                     '来源归属：据科技日报报道','参考指令：创建 feature/login 分支，编辑 app.py']:
+            self.assertEqual(external_link_issues(text),[])
     def test_title_items_and_tags_have_consistent_spacing(self):
         original='  WorkBuddy技能入口 \r\n1. 技能市场：选择技能。 \r\n2. 上传技能：导入本地技能包。\r\n\r\n\r\n#WorkBuddy  #Skills\r\n#AI办公  '
         expected='WorkBuddy技能入口\n\n1. 技能市场：选择技能。\n\n2. 上传技能：导入本地技能包。\n\n#WorkBuddy #Skills #AI办公'

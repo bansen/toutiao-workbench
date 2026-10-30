@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from .history_retention import recent_history
 from .browser import NeedsAttention
 from .publishing_checks import check_publish_declarations
+from .post_layout import external_link_issues
 
 
 def digest(body):
@@ -27,6 +28,9 @@ class PublicationGuard:
             return {**result, 'decision': 'review', 'reasons': ['发布账号或历史回执尚未核实，未放行发送']}
         if result['decision'] != 'clear':
             return result
+        link_issues = external_link_issues(draft.get('body',''))
+        if link_issues:
+            return {**result, 'decision':'review', 'reasons':link_issues}
         if draft.get('verify'):
             return {**result, 'decision': 'review', 'reasons': ['仍有待核实事项，请先人工处理']}
         records = self.ledger.records(account_id)
@@ -70,6 +74,9 @@ class PublicationGuard:
     async def send(self, candidate, account_id, confirmed_sha256, preflight, submit):
         frozen = json.loads(json.dumps(candidate, ensure_ascii=False))
         body = frozen.get('body', '')
+        link_issues = external_link_issues(body)
+        if link_issues:
+            raise NeedsAttention('；'.join(link_issues))
         if digest(body) != confirmed_sha256:
             raise NeedsAttention('正文与确认快照不一致，请重新确认')
         self.check_time()
