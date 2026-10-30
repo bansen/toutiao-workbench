@@ -14,6 +14,7 @@ from datetime import datetime, timezone, timedelta
 from urllib.parse import urlsplit, urlunsplit
 
 from .micro_content import MicroContent
+from .post_layout import LAYOUT_RULES, format_post, layout_issues
 
 PROFILE = 'ai-tools-v1'
 NEWS_AUTHORS = frozenset({'科技日报','新华社','新华网','央视新闻','人民日报','人民网','中国新闻网','中新网','界面新闻','界面快讯','财联社'})
@@ -154,7 +155,7 @@ def news_source_issues(source, now=None):
 
 def format_issues(draft, news=False):
     body, title = draft.get('body', '').strip(), draft.get('title', '').strip()
-    issues = []
+    issues = layout_issues(body)
     if not body or not title or body.splitlines()[0] != title:
         issues.append('发布正文必须以同一标题开头')
     if len(body) > 1800:
@@ -190,7 +191,7 @@ class AiToolContent(MicroContent):
         verify = result.get('verify')
         if not isinstance(verify, list) or not all(isinstance(v, str) for v in verify):
             raise ValueError('待核实事项格式不正确')
-        draft = {**(prior or {}), 'title': result['title'].strip(), 'body': result['body'].strip(), 'verify': verify,
+        draft = {**(prior or {}), 'title': result['title'].strip(), 'body': format_post(result['body']), 'verify': verify,
                  'model': getattr(self.llm, 'model', ''),
                  'sources': [{k: s.get(k) for k in ('id', 'title', 'url', 'author', 'kind', 'verified_at', 'published_at')} for s in sources],
                  'source_snapshots': sources,
@@ -200,14 +201,15 @@ class AiToolContent(MicroContent):
         return draft
 
     async def generate(self, sources, topic='AI', recent_titles=None):
-        result = await self.request(NEWS_RULES if is_news(sources) else EDITORIAL_RULES, {'sources': sources, 'recent_titles': recent_titles or []})
+        rules = (NEWS_RULES if is_news(sources) else EDITORIAL_RULES) + '\n' + LAYOUT_RULES
+        result = await self.request(rules, {'sources': sources, 'recent_titles': recent_titles or []})
         draft = self._draft(result, sources)
         draft['recent_titles'] = recent_titles or []
         draft['editorial_review'] = []
         return draft
 
     async def repair(self, draft, sources, topic, issues):
-        rules = NEWS_RULES if is_news(sources) else EDITORIAL_RULES
+        rules = (NEWS_RULES if is_news(sources) else EDITORIAL_RULES) + '\n' + LAYOUT_RULES
         result = await self.request(rules + '\n对同一主题作一次有证据的删改，解决issues，禁止仅清空verify；关键事实不成立就保留待核实项。',
                                     {'draft': draft, 'sources': sources, 'issues': issues, 'recent_titles': draft.get('recent_titles', [])})
         revised = self._draft(result, sources, draft)
@@ -237,7 +239,7 @@ class AiToolContent(MicroContent):
             return {'passed': False, 'issues': list(dict.fromkeys(issues))}
         def facts(s):
             return {k: s.get(k) for k in ('url', 'title', 'body', 'author', 'published_at')}
-        rules = NEWS_RULES if news else EDITORIAL_RULES
+        rules = (NEWS_RULES if news else EDITORIAL_RULES) + '\n' + LAYOUT_RULES
         result = await self.request(
             rules + ('\n现在仅检查，不创作。检查事件属于科技、近期事实有来源支持、保留宣称和实测的区别，旧闻没有包装成新事件。' if news else '\n现在仅检查，不创作。逐项执行上述十项自检；将产品名称换成另一个AI产品仍成立则过于通用。') +
             ('检查新闻中的事件、日期、型号、数字及效果断言有当前提供的来源正文支持，媒体转述保留归属，不把宣称写成独立实测。' if news else '检查所有功能、入口、价格、套餐、版本、格式及地区断言有当前官方正文支撑，真实实测不得虚构。') +

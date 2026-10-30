@@ -49,6 +49,16 @@ class APITests(unittest.TestCase):
         self.assertIn('核对',r.text)
         self.assertIn('attachment',r.headers['content-disposition'])
 
+    def test_export_does_not_repeat_title_already_in_publication_body(self):
+        draft=self.app.state.engine.store.save_generated('layout-task','layout-src',1,{
+            'title':'AI工具排版示例','body':'AI工具排版示例\n\n1. 具体入口：直接说明用途。\n\n#AI #工具 #效率',
+            'verify':[],'sources':[],'options':{'profile':'ai-tools-v1'}})
+        for format in ['md','txt']:
+            result=self.client.get('/api/drafts/'+draft['id']+'/export?format='+format)
+            self.assertEqual(result.status_code,200)
+            self.assertEqual(result.text.count('AI工具排版示例'),1)
+            self.assertIn('\n\n1. 具体入口',result.text)
+
     def test_check_requires_local_origin_and_bound_account(self):
         store=self.app.state.engine.store
         draft=store.save_generated('task','src',1,{'title':'稿件','body':'测试正文','verify':[], 'sources':[{'url':'https://www.toutiao.com/article/7701979050666902079/'}]})

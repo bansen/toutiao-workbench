@@ -369,7 +369,10 @@ def create_app(data_dir=None,browser=None,llm=None,publisher=None):
     @app.get('/api/drafts/{identity}/export')
     async def export_draft(identity:str,format:Literal['md','txt']='md'):
         draft=store.draft(identity)
-        lines=[('# ' if format=='md' else '')+draft['title'],'',draft['body'],'','待核实事项']
+        body=draft['body']
+        if body.splitlines() and body.splitlines()[0].strip()==draft['title'].strip():
+            body='\n'.join(body.splitlines()[1:]).lstrip('\n')
+        lines=[('# ' if format=='md' else '')+draft['title'],'',body,'','待核实事项']
         lines.extend('- '+v for v in draft.get('verify',[]))
         lines.extend(['','资料来源'])
         lines.extend(f"- {s.get('title','')} {s['url']}" for s in draft.get('sources',[]))

@@ -8,13 +8,22 @@ from workbench.publication_ledger import _canonical_source
 from workbench.store import Store
 from workbench.micro_runtime import MicroRuntime
 from workbench.browser import Browser
+from workbench.post_layout import format_post
 from pathlib import Path
 import tempfile
 
 BODY='WorkBuddy 的技能入口这样用\n\n1. 技能市场：在专家·技能·连接器中选择技能页签，查看推荐技能。\n2. 上传技能：从添加技能进入上传技能，导入本地技能包。\n3. 技能开关：关闭后新会话不再调用，已加载的会话可能仍可使用。\n\n#WorkBuddy #AI办公 #Skills'
 SOURCE={'url':'https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Skills-Market','title':'技能','author':'WorkBuddy 官方文档','body':'技能市场。添加技能支持上传技能，开关关闭后新会话不再调用。','kind':'official','verified_at':datetime.now(timezone.utc).isoformat()}
 
+BODY=format_post(BODY)
+
 class AiToolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dense_model_output_is_formatted_before_validation(self):
+        dense=BODY.replace('\n\n','\n')
+        service=AiToolContent(None);service.request=AsyncMock(return_value={'title':BODY.splitlines()[0],'body':dense,'verify':[]})
+        draft=await service.generate([SOURCE],'AI')
+        self.assertEqual(draft['body'],BODY)
+        self.assertEqual(draft['verify'],[])
     async def test_tech_news_uses_event_paragraphs_without_forced_function_list(self):
         now=datetime.now(timezone.utc).isoformat()
         source={'url':'https://www.toutiao.com/article/7701979050666902079/','title':'机器人新品发布',
@@ -49,6 +58,7 @@ class AiToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_optional_operation_steps_do_not_inflate_title_feature_count(self):
         body=BODY.replace('这样用','3个功能').replace('\n\n#WorkBuddy','\n\n操作方法：\n1. 打开技能页签。\n2. 选择需要的技能。\n\n#WorkBuddy')
+        body=format_post(body)
         self.assertEqual(format_issues({'title':body.splitlines()[0],'body':body}),[])
     async def test_profile_migration_cancels_old_pending_drafts_without_changing_schedule(self):
         from workbench.micro_queue import MicroQueue
