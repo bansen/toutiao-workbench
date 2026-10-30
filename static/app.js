@@ -245,6 +245,7 @@ async function openDraft(identity) {
   $('draft-verify').value=(draft.verify||[]).join('\n');
   $('draft-sources').innerHTML='<strong>资料来源</strong>'+(draft.sources||[]).map(source=>`<a target="_blank" rel="noopener noreferrer" href="${esc(source.url)}">${esc(source.title||source.url)} ↗</a>`).join('');
   $('draft-meta').textContent=`${draft.model} · ${dateText(draft.created_at)} · ${draft.options?.style||''} · 版本 ${draft.version}`;
+  $('draft-dedup-result').textContent='';
   $('draft-dialog').showModal();
 }
 
@@ -354,7 +355,7 @@ document.addEventListener('click',async event=>{
     if(button.dataset.retry){await api(`/api/tasks/${button.dataset.retry}/retry`,'POST');toast('已加入重试队列');await loadTasks();}
   }catch(error){toast(error.message,true);}
 });
-for(const id of ['draft-title','draft-body','draft-verify'])$(id).addEventListener('input',()=>{state.dirty=true;$('dirty-mark').textContent='未保存';});
+for(const id of ['draft-title','draft-body','draft-verify'])$(id).addEventListener('input',()=>{state.dirty=true;$('dirty-mark').textContent='未保存';$('draft-dedup-result').textContent='内容已修改，请重新查重';});
 act('draft-close',closeDraft);
 $('draft-dialog').addEventListener('cancel',event=>{event.preventDefault();closeDraft();});
 act('draft-save',async()=>{await saveDraft();toast('草稿已保存');});
@@ -381,3 +382,21 @@ function openModelFromHash(){
 }
 window.addEventListener('hashchange',openModelFromHash);
 openModelFromHash();
+
+act('draft-dedup',async()=>{
+  const button=$('draft-dedup'), report=$('draft-dedup-result');
+  button.disabled=true;
+  const identity=state.editing;
+  try {
+    const snapshot=[$('draft-title').value,$('draft-body').value,$('draft-verify').value].join('\n');
+    await saveDraft();
+    report.textContent='正在核对本地发布历史与事件，请稍候…';
+    const result=await api('/api/drafts/'+identity+'/dedup-check','POST');
+    if(state.editing!==identity)return;
+    if(snapshot!==[$('draft-title').value,$('draft-body').value,$('draft-verify').value].join('\n')) {
+      report.textContent='内容已修改，本次结果已失效，请重新查重';return;
+    }
+    const labels={clear:'当前历史未发现重复',duplicate:'重复稿件，禁止发送',review:'需要人工核实，未放行发送'};
+    report.textContent=(labels[result.decision]||labels.review)+'。'+(result.reasons||[]).join('；');
+  } finally {button.disabled=false;}
+});

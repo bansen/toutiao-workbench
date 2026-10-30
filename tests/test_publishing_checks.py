@@ -11,7 +11,7 @@ class PublishingDeclarationTests(unittest.TestCase):
             with self.assertRaises(NeedsAttention): declaration_state(native,classes)
 
     def test_only_exact_selected_class_is_recognized(self):
-        self.assertFalse(declaration_state(False,'byte-checkbox-checked-other'))
+        self.assertFalse(declaration_state(False,'byte-checkbox byte-checkbox-checked-other'))
 
     def test_first_release_must_be_off_and_ai_on(self):
         check_publish_declarations({'checked':False,'classes':'byte-checkbox'},{'checked':True,'classes':'byte-checkbox byte-checkbox-checked'})
@@ -19,3 +19,7 @@ class PublishingDeclarationTests(unittest.TestCase):
             check_publish_declarations({'checked':True,'classes':'byte-checkbox-checked'},{'checked':True,'classes':'byte-checkbox-checked'})
         with self.assertRaises(NeedsAttention):
             check_publish_declarations({'checked':False,'classes':'byte-checkbox'},{'checked':False,'classes':'byte-checkbox'})
+
+    def test_missing_visible_control_is_not_an_unchecked_declaration(self):
+        for classes in ['',None,'unrelated-control']:
+            with self.assertRaises(NeedsAttention): declaration_state(False,classes)

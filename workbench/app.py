@@ -18,6 +18,8 @@ from .model_config import ModelConfig,load_model_values,save_model_values
 from .parsing import select_items
 from .schemas import Collection,DOMAINS,DraftEdit,GenerateRequest,Generation,ImportRequest,Schedule
 from .store import Store
+from .publication_ledger import PublicationLedger
+from .publication_guard import PublicationGuard,digest
 
 ROOT=Path(__file__).resolve().parent.parent
 
@@ -32,15 +34,58 @@ def create_app(data_dir=None,browser=None,llm=None):
     browser=browser or Browser(data_dir/'browser')
     llm=llm or LLM(*load_model_values(ROOT,data_dir))
     engine=Engine(store,browser,llm,caps)
+    publications=PublicationLedger(store)
+    guard=PublicationGuard(publications,getattr(llm,"judge_duplicate",None),
+        ready=lambda account: bool(account) and store.setting("publishing_account",{}).get("id")==account
+            and not store.setting("publication_import_error",False))
 
     @asynccontextmanager
     async def lifespan(app):
+        publications.recover()
+        import_verified_test()
         await engine.start()
         yield
         await engine.close()
 
     app=FastAPI(title='头条内容工作台',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.engine=engine
+    app.state.publications=publications
+    app.state.publication_guard=guard
+
+    def import_verified_test():
+        preview_path=data_dir/"publishing-test-preview.json"
+        receipt_path=data_dir/"publishing-test-attempt.json"
+        if not preview_path.exists() or not receipt_path.exists():
+            return
+        try:
+            preview=json.loads(preview_path.read_text())
+            receipt=json.loads(receipt_path.read_text())
+            if not isinstance(preview,dict) or not isinstance(receipt,dict):
+                raise ValueError("测试回执格式不正确")
+            account_id=preview.get("account_id")
+            body=preview["body"]
+            if not (receipt.get("status")=="published" and receipt.get("body_verified")
+                    and isinstance(body,str) and isinstance(account_id,str) and account_id
+                    and account_id==receipt.get("account_id")
+                    and digest(body)==receipt.get("body_sha256")==preview.get("body_sha256")):
+                raise ValueError("回执与已确认正文不一致")
+            publications.record_verified({"title":"已确认的测试微头条","body":body,
+                "sources":preview["sources"],"verify":[]},account_id,receipt)
+            store.set_setting("publishing_account",{"id":account_id,"name":preview.get("account","")})
+            store.set_setting("publication_import_error",False)
+        except (ValueError,KeyError,TypeError,OSError):
+            store.set_setting("publication_import_error",True)
+
+    @app.get("/api/publications")
+    async def publication_history():
+        account=store.setting("publishing_account",{})
+        return {"account":account.get("name", ""),"items":publications.records(account.get("id",""))}
+
+    @app.post("/api/drafts/{identity}/dedup-check")
+    async def dedup_check(identity:str):
+        candidate=store.draft(identity)
+        account=store.setting("publishing_account",{})
+        return await guard.inspect(candidate,account.get("id",""))
 
     @app.middleware('http')
     async def local_requests(request:Request,call_next):

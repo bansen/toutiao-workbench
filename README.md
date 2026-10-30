@@ -153,3 +153,6 @@ python -m workbench.probe --kind micro --visible --output data/probe-micro
 网页入口和业务 API 独立；采集器、模型适配器、任务引擎和 SQLite 存储分别位于 `workbench/` 对应模块中。
 
 采集请求新增 `kinds`、`domains` 数组，生成请求新增 `styles` 数组；仍兼容旧的 `kind`、`domain`、`style` 单值字段和已保存设置。多选领域之间为分别检索，而不是把所有领域拼成一个关键词。
+
+
+微头条发布功能正在 `feature/auto-micro-publishing` 分支验证，自动模式尚未开放。该分支的草稿页增加“发送前查重”：拦截相同来源、相同或近似正文，并用模型检查跨来源同一事件。检查包括结果待核实记录；模型无法确定时需人工处理。范围限本工具已记录的发布历史，未同步手动发文不在范围内，查重按钮本身不会发布。详见 [实施记录](docs/自动微头条实施记录.md)。

@@ -49,5 +49,39 @@ class APITests(unittest.TestCase):
         self.assertIn('核对',r.text)
         self.assertIn('attachment',r.headers['content-disposition'])
 
+    def test_check_requires_local_origin_and_bound_account(self):
+        store=self.app.state.engine.store
+        draft=store.save_generated('task','src',1,{'title':'稿件','body':'测试正文','verify':[], 'sources':[{'url':'https://www.toutiao.com/article/7701979050666902079/'}]})
+        url='/api/drafts/'+draft['id']+'/dedup-check'
+        self.assertEqual(self.client.post(url).status_code,403)
+        self.assertEqual(self.client.post(url,headers=self.headers).json()['decision'],'review')
+        store.set_setting('publishing_account',{'id':'account','name':'测试'})
+        self.app.state.publications.record_verified(draft,'account',{'status':'published','content_id':'1880433446879241'})
+        self.assertEqual(self.client.post(url,headers=self.headers).json()['decision'],'duplicate')
+        self.assertEqual(len(self.client.get('/api/publications').json()['items']),1)
+
+
+    def test_verified_private_receipt_import_is_idempotent_and_mismatch_blocks(self):
+        import hashlib,json
+        body='真实测试正文'
+        sha=hashlib.sha256(body.encode()).hexdigest()
+        preview={'account_id':'verified-account','account':'已核实账号','body':body,'body_sha256':sha,
+                 'sources':[{'url':'https://www.toutiao.com/article/7701979050666902079/'}]}
+        receipt={'account_id':'verified-account','status':'published','body_verified':True,'body_sha256':sha,
+                 'content_id':'1880433446879241','url':'https://www.toutiao.com/w/1880433446879241/'}
+        directory=Path(self.tmp.name)
+        (directory/'publishing-test-preview.json').write_text(json.dumps(preview))
+        (directory/'publishing-test-attempt.json').write_text(json.dumps(receipt))
+        for _ in range(2):
+            imported=create_app(directory,browser=FakeBrowser(),llm=FakeLLM())
+            with TestClient(imported,base_url='http://127.0.0.1:8765') as client:
+                self.assertEqual(len(client.get('/api/publications').json()['items']),1)
+                self.assertFalse(imported.state.engine.store.setting('publication_import_error',False))
+        preview['body']='被修改的快照'
+        (directory/'publishing-test-preview.json').write_text(json.dumps(preview))
+        imported=create_app(directory,browser=FakeBrowser(),llm=FakeLLM())
+        with TestClient(imported,base_url='http://127.0.0.1:8765'):
+            self.assertTrue(imported.state.engine.store.setting('publication_import_error',False))
+
 
 if __name__=='__main__': unittest.main()

@@ -7,7 +7,9 @@ from .browser import NeedsAttention
 
 
 def declaration_state(native_checked:bool,classes:str)->bool:
-    rendered='byte-checkbox-checked' in (classes or '').split()
+    if not isinstance(classes,str) or not {'byte-checkbox','byte-checkbox-checked'} & set(classes.split()):
+        raise NeedsAttention('声明控件不可识别，须人工核实，未继续提交')
+    rendered='byte-checkbox-checked' in classes.split()
     if not isinstance(native_checked,bool) or native_checked!=rendered:
         raise NeedsAttention('声明控件的界面状态和输入状态不一致，须人工核实，未继续提交')
     return rendered
