@@ -12,7 +12,8 @@ from .micro_plan_store import MicroPlanStore
 from .micro_queue import MicroQueue
 from .micro_schedule import TIMEZONE
 from .publication_ledger import body_hash, _canonical_source
-from .ai_tools import PROFILE, AiToolContent, OfficialResearch
+from .ai_tools import PROFILE, AiToolContent, OfficialResearch, news_source_issues
+from .tech_news import TechNewsResearch, mix_candidates
 
 POSSIBLE = {'reserved', 'submitting', 'submitted', 'published', 'uncertain', 'rejected'}
 DEFAULT_KEYWORDS = {'民生': ['民生'], 'AI': ['人工智能'], '科技': ['科技']}
@@ -578,12 +579,17 @@ class MicroRuntime:
             keywords = self.store.setting('publishing_keywords', DEFAULT_KEYWORDS) or DEFAULT_KEYWORDS
             candidates = []
             discovered = {url for url in seen if isinstance(url,str)}
-            self._log('开始本轮AI工具官方资料备稿，页面候选额度30' if self.ai_tools else '开始本轮自动备稿：民生 / AI / 科技，总候选额度30')
+            self._log('开始本轮AI工具与科技新闻备稿：官方资料额度20，新闻候选额度10' if self.ai_tools else '开始本轮自动备稿：民生 / AI / 科技，总候选额度30')
             try:
                 if self.ai_tools:
                     async def read_official(url, product):
                         return await self._browser_step(self.browser.official_detail, url, product)
-                    candidates = await OfficialResearch(self.store, read_official).discover(discovered, 30)
+                    guides = await OfficialResearch(self.store, read_official).discover(discovered, 20)
+                    async def search_news(*args):
+                        return await self._browser_step(self.browser.search, *args)
+                    news = await TechNewsResearch(self.store, search_news).discover(discovered, now, 10)
+                    news.sort(key=lambda v: (v[2].get('comments') or 0, v[2].get('likes') or 0, _time(v[2].get('published_at')) or datetime.min.replace(tzinfo=TIMEZONE)), reverse=True)
+                    candidates = mix_candidates(guides, news)
                 else:
                     for topic in TOPICS:
                         for kind in ('article', 'micro'):
@@ -612,8 +618,9 @@ class MicroRuntime:
                                             self._log('列表时间未知，将在详情页核实')
                                     else:
                                         self._log('跳过候选：发布时间缺失、过期或在未来')
-                self._log(('发现官方资料候选：' + str(len(candidates)) + ' 条，按实际读取时间核实当前功能') if self.ai_tools else ('发现候选：' + str(len(candidates)) + ' 条，列表时间未知的将核实详情'))
-                candidates.sort(key=lambda v: (v[2].get('comments') or 0, v[2].get('likes') or 0, _time(v[2].get('published_at')) or datetime.min.replace(tzinfo=TIMEZONE)), reverse=True)
+                self._log(('发现AI工具与科技新闻候选：' + str(len(candidates)) + ' 条，新闻将在详情页核实时效与来源') if self.ai_tools else ('发现候选：' + str(len(candidates)) + ' 条，列表时间未知的将核实详情'))
+                if not self.ai_tools:
+                    candidates.sort(key=lambda v: (v[2].get('comments') or 0, v[2].get('likes') or 0, _time(v[2].get('published_at')) or datetime.min.replace(tzinfo=TIMEZONE)), reverse=True)
                 for topic, kind, card in candidates[:30]:
                     if not slots or not self._eligible(self._now()):
                         break
@@ -634,6 +641,9 @@ class MicroRuntime:
                             continue
                         if not item.get('body', item.get('content', '')).strip():
                             self._log('跳过候选：来源正文缺失或不可见')
+                            continue
+                        if self.ai_tools and kind != 'official' and news_source_issues(item, self._now()):
+                            self._log('跳过科技新闻：来源不在可靠媒体范围，或缺少有效时间与正文')
                             continue
                         item['metrics_source'] = card.get('search_url', url)
                         material, _ = self.store.upsert_material(item)

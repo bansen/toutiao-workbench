@@ -120,13 +120,30 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.browser.official_detail=AsyncMock(return_value=source)
         self.runtime.content.generate=AsyncMock(return_value={'title':'Codex技能','body':'技能正文',
             'verify':[],'sources':[source],'options':{'profile':PROFILE,'topic':'AI'}})
-        with patch('workbench.micro_runtime.OfficialResearch.discover',new=AsyncMock(return_value=[('AI','official',source)])):
+        with patch('workbench.micro_runtime.OfficialResearch.discover',new=AsyncMock(return_value=[('AI','official',source)])), patch('workbench.micro_runtime.TechNewsResearch.discover',new=AsyncMock(return_value=[])):
             await self.runtime.prepare()
         self.assertEqual(self.browser.calls,[])
         self.assertEqual(len(self.runtime.queue.items()),1)
         self.assertEqual(self.runtime.queue.items()[0]['topic'],'AI')
         self.runtime.content.generate.assert_awaited_once()
         self.assertIn('recent_titles',self.runtime.content.generate.call_args.kwargs)
+    async def test_ai_profile_can_queue_technology_news_with_detail_source_checks(self):
+        from unittest.mock import AsyncMock, patch
+        from workbench.ai_tools import PROFILE
+        self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify()
+        self.runtime.ai_tools=True
+        source={'url':'https://www.toutiao.com/article/7701979050666902079/','content_id':'7701979050666902079',
+                'kind':'article','title':'机器人新进展','author':'科技日报','body':'甲公司发布园区搬运机器人。',
+                'published_at':self.now.isoformat(),'collected_at':self.now.isoformat()}
+        self.browser.detail=AsyncMock(return_value=source)
+        self.runtime.content.generate=AsyncMock(return_value={'title':'机器人新进展','body':'机器人新闻正文','verify':[],
+            'sources':[source],'options':{'profile':PROFILE,'topic':'科技','content_type':'tech-news'}})
+        with patch('workbench.micro_runtime.OfficialResearch.discover',new=AsyncMock(return_value=[])) as guides, patch('workbench.micro_runtime.TechNewsResearch.discover',new=AsyncMock(return_value=[('科技','article',source)])) as news:
+            await self.runtime.prepare()
+        self.assertEqual(len(self.runtime.queue.items()),1)
+        self.assertEqual(self.runtime.queue.items()[0]['topic'],'科技')
+        self.assertEqual(guides.call_args.args[-1],20)
+        self.assertEqual(news.call_args.args[-1],10)
     async def test_restart_publishing_becomes_uncertain_and_pauses(self):
         row,_=self.enqueue(); self.runtime.queue.update(row['id'],{'status':'publishing'})
         self.runtime.plans.update_slot(row['slot_id'],{'status':'publishing'})

@@ -15,6 +15,38 @@ BODY='WorkBuddy 的技能入口这样用\n\n1. 技能市场：在专家·技能�
 SOURCE={'url':'https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Skills-Market','title':'技能','author':'WorkBuddy 官方文档','body':'技能市场。添加技能支持上传技能，开关关闭后新会话不再调用。','kind':'official','verified_at':datetime.now(timezone.utc).isoformat()}
 
 class AiToolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tech_news_uses_event_paragraphs_without_forced_function_list(self):
+        now=datetime.now(timezone.utc).isoformat()
+        source={'url':'https://www.toutiao.com/article/7701979050666902079/','title':'机器人新品发布',
+                'author':'科技日报','body':'甲公司今天发布一款仓储机器人，支持在园区搬运物料，尚未公布售价。',
+                'kind':'article','published_at':now,'collected_at':now}
+        body='仓储机器人又有新进展\n\n据科技日报报道，甲公司发布了一款仓储机器人，面向园区物料搬运。售价尚未公布。\n\n#机器人 #科技新闻 #智能设备'
+        service=AiToolContent(None);service.request=AsyncMock(return_value={'title':body.splitlines()[0],'body':body,'verify':[]})
+        draft=await service.generate([source],'科技',recent_titles=['旧标题'])
+        self.assertEqual(draft['verify'],[])
+        self.assertEqual(draft['options']['content_type'],'tech-news')
+        self.assertEqual(draft['options']['topic'],'科技')
+        self.assertEqual(draft['sources'][0]['published_at'],now)
+        service.request=AsyncMock(return_value={'passed':True,'issues':[]})
+        self.assertTrue((await service.check(draft,[source],'科技'))['passed'])
+        self.assertNotIn('当前官方正文支撑',str(service.request.call_args))
+        repaired=AiToolContent(None);repaired.request=AsyncMock(return_value={'title':draft['title'],'body':body,'verify':[]})
+        revised=await repaired.repair(draft,[source],'科技',['核实发布日期'])
+        self.assertEqual(revised['options']['content_type'],'tech-news')
+        self.assertEqual(revised['verify'],[])
+
+    async def test_tech_news_excludes_unknown_dates_old_news_and_untrusted_authors(self):
+        now=datetime.now(timezone.utc).isoformat()
+        body='科技事件进展\n\n据科技日报报道，甲公司发布园区机器人。\n\n#机器人 #科技新闻 #智能设备'
+        draft={'title':body.splitlines()[0],'body':body,'verify':[]}
+        source={'url':'https://www.toutiao.com/article/7701979050666902079/','kind':'article','author':'科技日报',
+                'body':'甲公司发布园区机器人。','published_at':now,'collected_at':now}
+        service=AiToolContent(None);service.request=AsyncMock(return_value={'passed':True,'issues':[]})
+        for bad in [{**source,'published_at':None},{**source,'published_at':'2025-01-01T00:00:00+00:00'},
+                    {**source,'author':'某某营销号'},{**source,'collected_at':'2025-01-01T00:00:00+00:00'}]:
+            self.assertFalse((await service.check(draft,[bad],'科技'))['passed'])
+        service.request.assert_not_awaited()
+
     async def test_optional_operation_steps_do_not_inflate_title_feature_count(self):
         body=BODY.replace('这样用','3个功能').replace('\n\n#WorkBuddy','\n\n操作方法：\n1. 打开技能页签。\n2. 选择需要的技能。\n\n#WorkBuddy')
         self.assertEqual(format_issues({'title':body.splitlines()[0],'body':body}),[])
