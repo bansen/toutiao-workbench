@@ -32,7 +32,10 @@ class LLM:
 
     async def generate(self,sources,options,version):
         async with self.lock:
-            return await self._generate(sources,options,version)
+            try:
+                return await self._generate(sources,options,version)
+            except ImportError:
+                raise ValueError('模型网络依赖不完整，请重新安装 requirements.txt（包含 SOCKS 代理支持）') from None
 
     async def _generate(self,sources,options,version):
         if not self.status()['configured']:
