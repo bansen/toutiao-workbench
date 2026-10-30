@@ -13,6 +13,23 @@ EDITOR='.ProseMirror[contenteditable="true"]'
 CREATE='https://mp.toutiao.com/profile_v4/weitoutiao/publish'
 MANAGE='https://mp.toutiao.com/profile_v4/manage/content/all?enter_from=left_menu'
 
+# The site retains this cache even when an empty editor emits an input event.
+# Clear only a cache whose rendered text matches the snapshot we own.
+CLEAR_OWNED_DRAFT_JS = r"""owned => {
+    const key = 'wtt-mpeditordraft';
+    const normal = text => text.replace(/\s+/g, ' ').trim();
+    try {
+        const cache = JSON.parse(localStorage.getItem(key));
+        if (!cache || typeof cache.content !== 'string') return false;
+        const doc = new DOMParser().parseFromString(cache.content, 'text/html');
+        const paragraphs = [...doc.querySelectorAll('p')];
+        const text = paragraphs.length ? paragraphs.map(p => p.textContent).join('\n') : doc.body.textContent;
+        if (normal(text) !== normal(owned)) return false;
+        localStorage.removeItem(key);
+        return true;
+    } catch { return false; }
+}"""
+
 
 def compact(text): return re.sub(r'\s+','',text)
 
@@ -39,13 +56,26 @@ class ToutiaoPublisher:
         self.page=None
         self.owns_lock=False
         self.snapshot=None
+        self.editor_body=None
 
     async def close(self):
         try:
-            if self.page and not self.page.is_closed():await self.page.close()
+            if self.page and not self.page.is_closed():
+                try:
+                    # Only clear text this adapter prepared, never a user's edits.
+                    if self.editor_body is not None:
+                        editor=self.page.locator(EDITOR)
+                        if await editor.count()==1 and rendered_text(await editor.inner_text())==rendered_text(self.editor_body):
+                            await editor.fill('')
+                            await self.page.evaluate(CLEAR_OWNED_DRAFT_JS, self.editor_body)
+                except Exception:
+                    pass # Cleanup must not replace the original failure or receipt.
+                finally:
+                    await self.page.close()
         finally:
             self.page=None
             self.snapshot=None
+            self.editor_body=None
             if self.owns_lock:
                 self.owns_lock=False
                 self.browser.lock.release()
@@ -99,14 +129,23 @@ class ToutiaoPublisher:
             if await label.count()!=1 or await label.locator('input[type="checkbox"]').count()!=1:
                 raise NeedsAttention('发布声明控件不可识别：'+name)
             control=label.locator('input[type="checkbox"]')
-            if apply and await control.is_checked()!=desired:
-                await label.get_by_text(name,exact=True).click()
-            # Require a settled component, not only a transient native value.
-            for _ in range(3):
+            # The platform can auto-select first release after text is filled;
+            # styles can also lag. Cancel once, then require three stable samples.
+            stable=0
+            clicked=False
+            for _ in range(10):
                 await asyncio.sleep(.2)
                 result[key]={'checked':await control.is_checked(),'classes':await label.get_attribute('class')}
-                if result[key]['checked']!=desired or ('byte-checkbox-checked' in result[key]['classes'].split())!=desired:
-                    raise NeedsAttention('声明状态未稳定：'+name)
+                matches=(result[key]['checked']==desired and
+                         ('byte-checkbox-checked' in (result[key]['classes'] or '').split())==desired)
+                if apply and result[key]['checked']!=desired and not clicked:
+                    await label.get_by_text(name,exact=True).click()
+                    clicked=True
+                    stable=0
+                    continue
+                stable=stable+1 if matches else 0
+                if stable>=3:break
+            if stable<3:raise NeedsAttention('声明状态未稳定：'+name)
         check_publish_declarations(**result,expected_ai=self.expected_ai())
         return result
 
@@ -121,7 +160,9 @@ class ToutiaoPublisher:
         await self._open(CREATE,EDITOR)
         editor=self.page.locator(EDITOR)
         previous=(await editor.inner_text()).strip()
-        if previous and previous!='有什么新鲜事想告诉大家？':raise NeedsAttention('微头条编辑器已有内容，已暂停以免覆盖')
+        if previous and previous!='有什么新鲜事想告诉大家？' and rendered_text(previous)!=rendered_text(draft['body']):
+            raise NeedsAttention('微头条编辑器已有其他内容，已暂停以免覆盖')
+        self.editor_body=draft['body']
         await editor.fill(draft['body'])
         actual=(await editor.inner_text()).replace('\r\n','\n').strip()
         if rendered_text(actual)!=rendered_text(draft['body']):raise NeedsAttention('编辑器正文与固定快照不一致，未提交')
@@ -133,7 +174,7 @@ class ToutiaoPublisher:
         if not self.page or not self.snapshot:raise NeedsAttention('未完成发布前检查，禁止提交')
         if not self.allowed():raise NeedsAttention('发布已暂停、关闭或错过时段，未点击发布')
         await self.check_account()
-        await self.declarations()
+        await self.declarations(apply=True)
         actual=(await self.page.locator(EDITOR).inner_text()).replace('\r\n','\n').strip()
         if rendered_text(actual)!=rendered_text(draft['body']) or digest(actual)!=self.snapshot['editor_body_sha256']:
             raise NeedsAttention('待发布正文发生变化，未提交')

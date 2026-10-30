@@ -81,7 +81,7 @@ class MicroQueue:
             db.execute('INSERT INTO micro_publish_queue VALUES(?,?,?)', (row['id'], row['slot_id'], self.store.dump(row)))
         return row
 
-    def update(self, identity, changes, expected_statuses=None):
+    def update(self, identity, changes, expected_statuses=None, *, before_submit=False):
         if set(changes) - _UPDATE_FIELDS:
             raise ValueError('不能修改发布正文快照或队列标识')
         changes = deepcopy(changes)
@@ -97,7 +97,8 @@ class MicroQueue:
             next_status = changes.get('status', status)
             if status == 'publishing' and changes.get('status') == 'publishing':
                 raise ValueError('发布已领取，禁止重复发布')
-            if next_status != status and next_status not in _TRANSITIONS[status]:
+            proven_before_submit = before_submit is True and status == 'publishing' and next_status == 'failed'
+            if next_status != status and next_status not in _TRANSITIONS[status] and not proven_before_submit:
                 raise ValueError('不允许此队列状态转换')
             if 'confirmed_sha256' in changes:
                 if status not in ('pending', 'awaiting_confirmation') or changes['confirmed_sha256'] != row['body_sha256']:

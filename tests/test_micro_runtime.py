@@ -457,3 +457,48 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         queued = await self.runtime.stage(candidate['id'], 'AI', hashlib.sha256(candidate['body'].encode()).hexdigest())
         self.assertEqual(queued['status'], 'pending')
         self.assertEqual(calls, [])
+
+    async def test_preflight_failure_is_failed_not_uncertain_and_reason_is_logged(self):
+        from workbench.browser import NeedsAttention
+        row,_=self.enqueue(); await self.runtime.verify()
+        async def blocked(draft):raise NeedsAttention('微头条编辑器已有内容，已暂停以免覆盖')
+        self.publisher.preflight=blocked
+        await self.runtime.tick()
+        record=self.runtime.queue.get(row['id'])
+        self.assertEqual(record['status'],'failed')
+        self.assertIn('编辑器已有内容',record['reason'])
+        self.assertEqual(self.runtime.plans.load(self.now.date())['slots'][0]['status'],'failed')
+        self.assertIn('编辑器已有内容',str(self.store.setting('publishing_logs')))
+        self.assertEqual(self.publisher.calls,0)
+
+    async def test_unknown_exception_before_submit_never_logs_secret(self):
+        row,_=self.enqueue(); await self.runtime.verify()
+        async def blocked(draft):raise ValueError('secret browser token')
+        self.publisher.preflight=blocked
+        await self.runtime.tick()
+        self.assertEqual(self.runtime.queue.get(row['id'])['status'],'failed')
+        self.assertNotIn('secret',str(self.store.setting('publishing_logs')))
+
+    async def test_real_guard_preflight_failure_keeps_failed_attempt_identity(self):
+        from workbench.browser import NeedsAttention
+        from workbench.publication_ledger import PublicationLedger
+        from workbench.publication_guard import PublicationGuard
+        row,_=self.enqueue(); await self.runtime.verify()
+        ledger=PublicationLedger(self.store)
+        async def judge(*args):return {'decision':'distinct'}
+        self.runtime.guard=PublicationGuard(ledger,judge,clock=lambda:self.now,expected_ai=lambda:False)
+        async def blocked(draft):raise NeedsAttention('微头条编辑器已有其他内容，已暂停以免覆盖')
+        self.publisher.preflight=blocked
+        await self.runtime.tick()
+        record=self.runtime.queue.get(row['id'])
+        self.assertEqual(record['status'],'failed')
+        self.assertEqual(ledger.get(record['publication_id'])['status'],'failed_before_submit')
+        self.assertEqual(self.publisher.calls,0)
+
+    async def test_restart_preserves_terminal_failed_slot(self):
+        row,_=self.enqueue()
+        self.runtime.queue.update(row['id'],{'status':'failed','reason':'未提交'})
+        self.runtime.plans.update_slot(row['slot_id'],{'status':'failed','reason':'未提交'})
+        await self.runtime.start();await self.runtime.close()
+        slot=next(s for s in self.runtime.plans.load(self.now.date())['slots'] if s['id']==row['slot_id'])
+        self.assertEqual(slot['status'],'failed')

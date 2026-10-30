@@ -140,7 +140,12 @@ class MicroRuntime:
                 changes = {key: row[key] for key in ('status', 'publication_id', 'receipt', 'reason') if key in row}
                 self.plans.update_slot(row['slot_id'], changes)
             elif row['status'] in {'cancelled', 'skipped', 'failed'}:
-                self.plans.update_slot(row['slot_id'], {'status': 'skipped', 'reason': row.get('reason', '队列稿件已停止发布')})
+                saved_plan = self.plans.load(_time(row['scheduled_at']).date())
+                saved_slot = next((s for s in (saved_plan or {}).get('slots', []) if s['id'] == row['slot_id']), None)
+                if saved_slot and saved_slot['status'] in {'failed', 'skipped', 'cancelled', 'completed', 'published', 'rejected'}:
+                    continue
+                self.plans.update_slot(row['slot_id'], {'status': 'failed' if row['status'] == 'failed' else 'skipped',
+                                                       'reason': row.get('reason', '队列稿件已停止发布')})
             elif row['status'] in {'pending', 'awaiting_confirmation'} and _time(row['scheduled_at']) < now:
                 self._skip(row['slot_id'], row, '重启后不补发错过排期')
         self._retain_history(now)
@@ -318,6 +323,8 @@ class MicroRuntime:
         self.browser.publishing_idle.clear()
         self._running = True
         claimed = False
+        submit_started = False
+        stage = '来源检查'
         try:
             draft = self.store.draft(row['draft_id'])
             if any(draft.get(k) != row.get(k) for k in ('title', 'body', 'verify', 'sources')):
@@ -338,7 +345,10 @@ class MicroRuntime:
             self.queue.update(row['id'], {'status': 'publishing', 'confirmed_sha256': row['body_sha256']}, expected_statuses=['pending'])
             claimed = True
             self.plans.update_slot(slot['id'], {'status': 'publishing'})
+            stage = '发布历史查重'
             async def preflight(snapshot):
+                nonlocal stage
+                stage = '编辑器与声明检查'
                 if not self._allowed():
                     raise NeedsAttention('发布条件已变化')
                 checks = await self.publisher.preflight(snapshot)
@@ -346,8 +356,11 @@ class MicroRuntime:
                     raise NeedsAttention('发布条件已变化')
                 return checks
             async def submit(snapshot):
+                nonlocal submit_started, stage
                 if not self._allowed():
                     raise NeedsAttention('发布条件已变化')
+                submit_started = True
+                stage = '提交与回执核查'
                 return await self.publisher.submit(snapshot)
             record = await self.guard.send(row, self._account(), row['body_sha256'], preflight, submit)
             receipt = record.get('receipt', record)
@@ -363,15 +376,27 @@ class MicroRuntime:
             self._log('提交结果：' + status)
         except BaseException as exc:
             if claimed:
-                matching = [r for r in self._records() if r.get('body_hash') == body_hash(row['body'])]
+                ledger = getattr(self.guard, 'ledger', None)
+                matching = [r for r in (ledger.records(self._account(), include_inactive=True) if ledger else [])
+                            if r.get('body_hash') == body_hash(row['body'])]
                 record = matching[-1] if matching else None
-                status = 'rejected' if record and record.get('status') == 'failed_before_submit' else 'uncertain'
-                changes = {'status': status, 'reason': '发布未完成，请核实回执；禁止自动重发'}
+                status = 'uncertain' if submit_started else 'failed'
+                # Only fixed application errors are safe to expose; arbitrary
+                # HTTP/model/browser exception text can contain credentials.
+                detail = str(exc)[:240] if isinstance(exc, NeedsAttention) else type(exc).__name__
+                reason = f'{stage}失败：{detail}'
+                if submit_started:
+                    reason = '发布结果待核实，禁止重发；' + reason
+                else:
+                    reason = '提交前失败，未发送；' + reason
+                changes = {'status': status, 'reason': reason}
                 if record:
                     changes['publication_id'] = record['id']
-                self.queue.update(row['id'], changes)
-                self.plans.update_slot(slot['id'], changes)
-                self.pause('发布异常或回执不明确，请人工核实')
+                self.queue.update(row['id'], changes, before_submit=not submit_started)
+                self.plans.update_slot(slot['id'], changes, before_submit=not submit_started)
+                self._log(reason)
+                if submit_started or isinstance(exc, NeedsAttention):
+                    self.pause(reason)
             else:
                 current = self.queue.get(row['id'])
                 if current['status'] == 'pending':

@@ -100,13 +100,13 @@ class PublicationLedger:
                 db.execute('CREATE TABLE IF NOT EXISTS publication_history (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, payload TEXT NOT NULL)')
                 db.execute('CREATE INDEX IF NOT EXISTS publication_history_account ON publication_history(account_id)')
 
-    def _records(self, db, account_id):
+    def _records(self, db, account_id, include_inactive=False):
         rows = db.execute('SELECT payload FROM publication_history WHERE account_id=? ORDER BY rowid', (account_id,))
-        return [record for row in rows if (record := json.loads(row[0]))['status'] in ACTIVE_STATUSES]
+        return [record for row in rows if (record := json.loads(row[0]))['status'] in ACTIVE_STATUSES or include_inactive]
 
-    def records(self, account_id):
+    def records(self, account_id, include_inactive=False):
         with self.store.connection() as db:
-            return self._records(db, account_id)
+            return self._records(db, account_id, include_inactive)
 
     @staticmethod
     def _version(records):

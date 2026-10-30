@@ -51,7 +51,7 @@ class MicroPlanStore:
             row=db.execute('SELECT payload FROM micro_daily_plans WHERE day=?',(key,)).fetchone()
         return json.loads(row[0]) if row else None
 
-    def update_slot(self, slot_id, changes, expected_statuses=None):
+    def update_slot(self, slot_id, changes, expected_statuses=None, *, before_submit=False):
         """Atomically update slot progress while preserving the drawn schedule."""
         allowed={'status','reason','queue_id','draft_id','topic','event_key','publication_id','receipt'}
         statuses={'pending','queued','awaiting_confirmation','publishing','submitted','published',
@@ -74,7 +74,8 @@ class MicroPlanStore:
                     'uncertain':{'submitted','published','rejected'},
                 }
                 next_status=changes.get('status',slot['status'])
-                if slot['status'] in possible_submission and next_status!=slot['status'] and next_status not in possible_submission[slot['status']]:
+                proven_before_submit = before_submit is True and slot['status']=='publishing' and next_status=='failed'
+                if slot['status'] in possible_submission and next_status!=slot['status'] and next_status not in possible_submission[slot['status']] and not proven_before_submit:
                     raise ValueError('可能已提交的排期不能重新启用，必须核实平台回执')
                 if slot['status'] in ('skipped','completed','published','rejected','cancelled','failed') and changes.get('status',slot['status'])!=slot['status']:
                     raise ValueError('终态排期不能重新启用')

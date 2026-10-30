@@ -3,7 +3,7 @@ import asyncio,html,tempfile,sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
 from workbench.browser import Browser,NeedsAttention
-from workbench.toutiao_publisher import ToutiaoPublisher,CREATE,MANAGE
+from workbench.toutiao_publisher import ToutiaoPublisher,CREATE,MANAGE,CLEAR_OWNED_DRAFT_JS
 from workbench.publication_guard import digest
 
 async def main():
@@ -49,7 +49,13 @@ async def main():
    except NeedsAttention:pass
    else:raise AssertionError('Pause must prevent submit')
    assert clicks==['submitted']
+   await publisher.page.evaluate("text => localStorage.setItem('wtt-mpeditordraft', JSON.stringify({content:'<p>'+text+'</p>'}))", body)
+   assert not await publisher.page.evaluate(CLEAR_OWNED_DRAFT_JS, 'different body')
    await publisher.close()
+   inspection=await browser.context.new_page()
+   await inspection.goto(CREATE)
+   assert await inspection.evaluate("localStorage.getItem('wtt-mpeditordraft')") is None
+   await inspection.close()
    audit['tags']='审核中'
    await publisher.preflight({'body':body})
    publisher.allowed=lambda:True

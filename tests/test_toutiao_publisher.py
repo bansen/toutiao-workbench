@@ -14,3 +14,90 @@ class PublisherParsingTests(unittest.TestCase):
     def test_rendered_newline_equivalence_preserves_word_boundaries(self):
         self.assertEqual(rendered_text('第一段\n\n第二段'),rendered_text('第一段\n\n\n第二段'))
         self.assertNotEqual(rendered_text('now here'),rendered_text('nowhere'))
+
+class PublisherEditorTests(unittest.IsolatedAsyncioTestCase):
+    def publisher(self, text):
+        from unittest.mock import AsyncMock, Mock
+        from workbench.toutiao_publisher import ToutiaoPublisher
+        self.editor=Mock()
+        self.editor.inner_text=AsyncMock(side_effect=lambda:text if not self.editor.fill.await_count else '正文\n\n第二段')
+        self.editor.fill=AsyncMock()
+        self.editor.count=AsyncMock(return_value=1)
+        self.page=Mock()
+        self.page.is_closed.return_value=False
+        self.page.locator.return_value=self.editor
+        self.page.close=AsyncMock()
+        self.page.evaluate=AsyncMock(return_value=True)
+        publisher=ToutiaoPublisher(Mock(),lambda:'account')
+        async def opened(*args):publisher.page=self.page
+        publisher._open=opened
+        publisher.check_account=AsyncMock(return_value='account')
+        publisher.declarations=AsyncMock(return_value={})
+        return publisher
+
+    async def test_same_restored_candidate_is_reusable(self):
+        publisher=self.publisher('正文\n\n\n第二段')
+        await publisher.preflight({'body':'正文\n\n第二段'})
+        self.editor.fill.assert_awaited_once_with('正文\n\n第二段')
+
+    async def test_other_restored_text_is_never_overwritten(self):
+        from workbench.browser import NeedsAttention
+        publisher=self.publisher('用户自己的未完成正文')
+        with self.assertRaises(NeedsAttention):await publisher.preflight({'body':'正文\n\n第二段'})
+        self.editor.fill.assert_not_awaited()
+
+    async def test_close_cleans_only_unchanged_owned_editor(self):
+        publisher=self.publisher('')
+        await publisher.preflight({'body':'正文\n\n第二段'})
+        await publisher.close()
+        self.assertEqual(self.editor.fill.await_args.args, ('',))
+
+    async def test_close_preserves_user_edit_after_preflight(self):
+        from unittest.mock import AsyncMock
+        publisher=self.publisher('')
+        await publisher.preflight({'body':'正文\n\n第二段'})
+        self.editor.inner_text=AsyncMock(return_value='用户后来修改的正文')
+        await publisher.close()
+        self.editor.fill.assert_awaited_once_with('正文\n\n第二段')
+
+class PublisherDeclarationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_waits_for_component_style_after_native_value_changes(self):
+        from unittest.mock import AsyncMock, Mock
+        from workbench.toutiao_publisher import ToutiaoPublisher
+        publisher=ToutiaoPublisher(Mock(),lambda:'account',expected_ai=lambda:False)
+        labels={}
+        for name in ('头条首发','引用AI'):
+            label=Mock();control=Mock()
+            label.count=AsyncMock(return_value=1);control.count=AsyncMock(return_value=1)
+            label.locator.return_value=control
+            control.is_checked=AsyncMock(side_effect=[True]+[False]*12) if name=='头条首发' else AsyncMock(return_value=False)
+            label.get_attribute=AsyncMock(side_effect=['byte-checkbox byte-checkbox-checked']+['byte-checkbox']*12) if name=='头条首发' else AsyncMock(return_value='byte-checkbox')
+            label.get_by_text.return_value.click=AsyncMock()
+            labels[name]=label
+        publisher.label=lambda name:labels[name]
+        result=await publisher.declarations(apply=True)
+        self.assertFalse(result['exclusive']['checked'])
+        labels['头条首发'].get_by_text.return_value.click.assert_awaited_once()
+
+    async def test_late_platform_auto_selection_is_cancelled_once(self):
+        from unittest.mock import AsyncMock, Mock
+        from workbench.toutiao_publisher import ToutiaoPublisher
+        publisher=ToutiaoPublisher(Mock(),lambda:'account',expected_ai=lambda:False)
+        labels={};state={'reads':0,'clicked':False,'checked':False}
+        def checked():
+            state['reads']+=1
+            state['checked']=state['reads']>=2 and not state['clicked']
+            return state['checked']
+        def click():state['clicked']=True
+        for name in ('头条首发','引用AI'):
+            label=Mock();control=Mock()
+            label.count=AsyncMock(return_value=1);control.count=AsyncMock(return_value=1)
+            label.locator.return_value=control
+            control.is_checked=AsyncMock(side_effect=checked) if name=='头条首发' else AsyncMock(return_value=False)
+            label.get_attribute=AsyncMock(side_effect=lambda *args:'byte-checkbox byte-checkbox-checked' if state['checked'] else 'byte-checkbox') if name=='头条首发' else AsyncMock(return_value='byte-checkbox')
+            label.get_by_text.return_value.click=AsyncMock(side_effect=click)
+            labels[name]=label
+        publisher.label=lambda name:labels[name]
+        result=await publisher.declarations(apply=True)
+        self.assertFalse(result['exclusive']['checked'])
+        labels['头条首发'].get_by_text.return_value.click.assert_awaited_once()
