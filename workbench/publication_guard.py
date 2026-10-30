@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from .history_retention import recent_history
 from .browser import NeedsAttention
 from .publishing_checks import check_publish_declarations
 
@@ -31,6 +32,7 @@ class PublicationGuard:
         records = self.ledger.records(account_id)
         if self.ledger._version(records) != result['history_version']:
             return {**result, 'decision': 'review', 'reasons': ['发布历史已变化，请重新查重']}
+        records = recent_history(records, self.clock())
         batches, batch, size = [], [], 0
         for record in records:
             item = {k: record.get(k) for k in ('id', 'title', 'body', 'created_at')}

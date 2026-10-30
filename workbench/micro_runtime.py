@@ -5,6 +5,7 @@ import uuid
 from collections import Counter
 from datetime import datetime, timedelta
 
+from .history_retention import compact_history, recent_history
 from .browser import NeedsAttention
 from .micro_content import MicroContent, TOPICS
 from .micro_plan_store import MicroPlanStore
@@ -33,6 +34,7 @@ class MicroRuntime:
         self._loop_task = self._prepare_task = None
         self._tick_lock, self._prepare_lock = asyncio.Lock(), asyncio.Lock()
         self._closed, self._running, self._last_tick, self._last_prepare = False, False, None, None
+        self._last_retention = None
         self._active_slot = None
         self.publisher.allowed = self._allowed
         if not hasattr(browser, 'publishing_idle'):
@@ -141,6 +143,7 @@ class MicroRuntime:
                 self.plans.update_slot(row['slot_id'], {'status': 'skipped', 'reason': row.get('reason', '队列稿件已停止发布')})
             elif row['status'] in {'pending', 'awaiting_confirmation'} and _time(row['scheduled_at']) < now:
                 self._skip(row['slot_id'], row, '重启后不补发错过排期')
+        self._retain_history(now)
         self._last_tick = now
         self._loop_task = asyncio.create_task(self._loop())
 
@@ -169,6 +172,9 @@ class MicroRuntime:
             try:
                 await self.tick()
                 now = self._now()
+                if self._last_retention is None or now - self._last_retention >= timedelta(hours=1):
+                    async with self._tick_lock:
+                        self._retain_history(now)
                 if self._eligible(now) and (self._last_prepare is None or now - self._last_prepare >= timedelta(hours=1)) and not (self._prepare_task and not self._prepare_task.done()):
                     self._last_prepare = now
                     self._prepare_task = asyncio.create_task(self.prepare())
@@ -177,6 +183,12 @@ class MicroRuntime:
             except Exception:
                 self.pause('自动发布运行异常，请人工检查')
             await asyncio.sleep(2)
+
+    def _retain_history(self, now):
+        if getattr(self.guard, 'ledger', None) is not None:
+            compact_history(self.store, 'publication_history', now)
+        compact_history(self.store, 'micro_publish_queue', now)
+        self._last_retention = now
 
     def _eligible(self, now):
         return not self._closed and self._enabled() and self._ready() and not self._paused() and 8 <= now.hour < 22
@@ -417,6 +429,7 @@ class MicroRuntime:
             origins = {_canonical_source(source['url']) for source in draft.get('sources', [])}
             if not origins or any(origins & {_canonical_source(source['url']) for source in row.get('sources', [])} for row in history):
                 raise ValueError('已有队列稿件使用相同来源')
+            history = recent_history(history, self._now())
             for offset in range(0, len(history), 20):
                 duplicate = await self.llm.judge_duplicate(draft, history[offset:offset+20])
                 if duplicate.get('decision') != 'distinct':
@@ -574,7 +587,7 @@ class MicroRuntime:
                                 self._log('已保存待人工处理稿：' + reason_text)
                             continue
                         distinct = True
-                        history = self.queue.history()
+                        history = recent_history(self.queue.history(), self._now())
                         for offset in range(0, len(history), 20):
                             result = await self.llm.judge_duplicate(draft, history[offset:offset+20])
                             if result.get('decision') != 'distinct':

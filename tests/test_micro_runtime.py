@@ -422,3 +422,38 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.runtime.prepare()
         self.assertEqual(self.store.drafts(),[]); self.assertEqual(self.runtime.queue.items(),[])
         self.assertIn('同一事件已有发布记录',str(self.store.setting('publishing_logs')))
+
+    async def test_start_compacts_old_resolved_queue_but_preserves_draft(self):
+        row, draft = self.enqueue()
+        self.runtime.queue.update(row['id'], {'status': 'skipped'})
+        old = self.runtime.queue.get(row['id'])
+        old['created_at'] = (self.now - timedelta(days=4)).isoformat()
+        with self.store.connection() as db:
+            db.execute('UPDATE micro_publish_queue SET payload=? WHERE id=?', (self.store.dump(old), row['id']))
+        await self.runtime.start()
+        await self.runtime.close()
+        self.assertTrue(self.runtime.queue.get(row['id'])['history_compacted'])
+        self.assertEqual(self.store.draft(draft['id'])['body'], draft['body'])
+
+    async def test_staging_does_not_send_old_queue_body_to_model(self):
+        row, draft = self.enqueue()
+        self.runtime.queue.update(row['id'], {'status': 'publishing'})
+        self.runtime.queue.update(row['id'], {'status': 'published'})
+        old = self.runtime.queue.get(row['id'])
+        old['created_at'] = (self.now - timedelta(days=4)).isoformat()
+        with self.store.connection() as db:
+            db.execute('UPDATE micro_publish_queue SET payload=? WHERE id=?', (self.store.dump(old), row['id']))
+        await self.runtime.verify()
+        candidate = self.store.save_generated('new', 'new', 1, {
+            'title': '新稿', 'body': '完全不同的事件', 'verify': [],
+            'sources': [{'url': 'https://www.toutiao.com/article/123456789013/'}],
+            'source_snapshots': [{'body': '来源'}]})
+        calls = []
+        async def judge(candidate, history):
+            calls.append(history)
+            return {'decision': 'uncertain'}
+        self.runtime.llm.judge_duplicate = judge
+        import hashlib
+        queued = await self.runtime.stage(candidate['id'], 'AI', hashlib.sha256(candidate['body'].encode()).hexdigest())
+        self.assertEqual(queued['status'], 'pending')
+        self.assertEqual(calls, [])
