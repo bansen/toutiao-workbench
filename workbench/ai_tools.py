@@ -37,6 +37,12 @@ PRODUCTS = [
     ('Claude', 'support.claude.com', '/en/'),
     ('Gemini', 'support.google.com', '/gemini/'),
 ]
+# Discovery hints only: every selected page must still be freshly rendered,
+# checked against its body, and pass the normal editorial and dedup gates.
+FEATURE_ENTRIES = {
+    'WorkBuddy': ['https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Automation-Guide'],
+    'Dify': ['https://docs.dify.ai/zh/cloud/use-dify/nodes/variable-aggregator'],
+}
 # Exact hosts: neither suffix matching nor arbitrary user-supplied URLs.
 OFFICIAL_HOSTS = frozenset(host for _, host, _ in PRODUCTS) | {
     'www.workbuddy.ai', 'workbuddy.cn', 'docs.trae.ai', 'www.trae.cn',
@@ -280,12 +286,14 @@ class OfficialResearch:
             try:
                 checked += 1
                 root = await self.read(root_url, name)
-                choices = [root, *root.get('links', [])[:8]]
+                choices = [root, *({'url':u} for u in FEATURE_ENTRIES.get(name, [])), *root.get('links', [])[:8]]
                 for choice in choices:
                     if choice is not root and checked >= limit:
                         break
                     url = choice['url'] if isinstance(choice, dict) else choice
                     url = canonical_official_url(url)
+                    if re.search(r'/llms[^/]*\.(?:txt|json)$', urlsplit(url).path, re.I):
+                        continue
                     if url in exclude:
                         continue
                     try:

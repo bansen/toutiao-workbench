@@ -88,7 +88,7 @@ class AiToolTests(unittest.IsolatedAsyncioTestCase):
             reader=AsyncMock(side_effect=read)
             result=await OfficialResearch(store,reader).discover({SOURCE['url']},limit=2)
             self.assertEqual(reader.await_count,2)
-            self.assertEqual(result[0][2]['url'],'https://www.workbuddy.cn/docs/new-feature')
+            self.assertIn('Automation-Guide',result[0][2]['url'])
             self.assertLessEqual(store.setting('ai_tools_last_research')['checked'],2)
             store.set_setting('ai_tools_cursor',0)
             reader.reset_mock()

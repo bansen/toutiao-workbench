@@ -185,7 +185,7 @@ class MicroRuntime:
                 if self._last_retention is None or now - self._last_retention >= timedelta(hours=1):
                     async with self._tick_lock:
                         self._retain_history(now)
-                if self._eligible(now) and (self._last_prepare is None or now - self._last_prepare >= timedelta(hours=1)) and not (self._prepare_task and not self._prepare_task.done()):
+                if self._eligible(now) and self._preparation_due(now) and not (self._prepare_task and not self._prepare_task.done()):
                     self._last_prepare = now
                     self._prepare_task = asyncio.create_task(self.prepare())
             except asyncio.CancelledError:
@@ -202,6 +202,82 @@ class MicroRuntime:
 
     def _eligible(self, now):
         return not self._closed and self._enabled() and self._ready() and not self._paused() and 8 <= now.hour < 22
+
+    def _preparation_slots(self, now):
+        plan = self.plans.load(now.date()) or {}
+        occupied = {r['slot_id'] for r in self.queue.items()}
+        horizon = timedelta(hours=2 if self.ai_tools else 1)
+        return [s for s in plan.get('slots', []) if s['status']=='pending' and s['id'] not in occupied
+                and now < _time(s['scheduled_at']) <= now+horizon]
+
+    def _preparation_due(self, now):
+        interval = timedelta(minutes=5) if self.ai_tools else timedelta(hours=1)
+        return bool(self._preparation_slots(now)) and (self._last_prepare is None or now-self._last_prepare>=interval)
+
+    async def _recover_review_drafts(self):
+        now = self._now()
+        attempts = self.store.setting('micro_review_repaired', {}) or {}
+        attempts = {key:value for key,value in attempts.items() if (_time(value) or now)>=now-timedelta(days=3)}
+        occupied_sources = {s.get('url') for row in self.queue.history()+self._records() for s in row.get('sources', [])}
+        candidates = []
+        for draft in recent_history(self.store.drafts(), now):
+            origin = draft.get('recovery_origin') or draft['id']
+            notes = '；'.join(draft.get('verify') or [])
+            if ((draft.get('options') or {}).get('profile')!=PROFILE or not notes or origin in attempts
+                    or draft.get('editorial_review') or draft.get('quality_repair_attempted') or draft.get('publication_review_blocked')):
+                continue
+            if any(v in notes for v in ('来源仅为','只是目录','本轮只读到','只依据帮助中心目录','product标记','未读取正文','事件查重','事件是否重复','与队列','发布历史查重','发布账号','历史回执')):
+                continue
+            if not draft.get('sources') or any(s.get('url') in occupied_sources for s in draft['sources']):
+                continue
+            candidates.append(draft)
+        candidates.sort(key=lambda d:(any(s.get('kind')!='official' for s in d['sources']),len(d.get('verify') or [])))
+        for old in candidates[:8]:
+            if not self._eligible(self._now()) or not self._preparation_slots(self._now()):
+                break
+            if any(s.get('url') in occupied_sources for s in old.get('sources', [])):
+                continue
+            origin = old.get('recovery_origin') or old['id']
+            try:
+                sources = await self._refresh(old)
+                if any(s.get('kind')!='official' and news_source_issues(s, self._now()) for s in sources):
+                    continue
+                attempts[origin] = self._now().isoformat()
+                self.store.set_setting('micro_review_repaired', attempts)
+                old = {**old,'recent_titles':self._recent_titles()}
+                fixed = await self.content.repair(old, sources, (old.get('options') or {}).get('topic','AI'),old['verify'])
+                fixed.update(recovery_origin=origin,quality_repair_attempted=True)
+                topic = (fixed.get('options') or {}).get('topic','AI')
+                check = await self.content.check(fixed, sources, topic)
+                if check.get('passed') is not True:
+                    self._save_review_draft(fixed, check.get('issues') or ['修整后仍未通过检查'])
+                    self._log('保存稿修整未通过：'+'；'.join(check.get('issues') or [])[:300])
+                    continue
+                verdict = await self.guard.inspect(fixed,self._account())
+                if verdict.get('decision')!='clear':
+                    self._save_review_draft(fixed,verdict.get('reasons') or ['发布查重尚未通过'])
+                    continue
+                history = recent_history(self.queue.history(),self._now())
+                distinct = True
+                for offset in range(0,len(history),20):
+                    if (await self.llm.judge_duplicate(fixed,history[offset:offset+20])).get('decision')!='distinct':
+                        distinct=False;break
+                if not distinct:
+                    self._save_review_draft(fixed,['修整稿与队列重复或无法确定'])
+                    continue
+                saved = self.store.save_generated(uuid.uuid4().hex,uuid.uuid4().hex,1,fixed)
+                slots = self._preparation_slots(self._now())
+                if not slots or not self._eligible(self._now()):break
+                slot = slots[0]
+                event_key=hashlib.sha256('\n'.join(sorted(_canonical_source(s['url']) for s in saved['sources'])).encode()).hexdigest()
+                row=self.queue.add(slot,saved,topic,event_key)
+                self.plans.update_slot(slot['id'],{'status':'queued','queue_id':row['id'],'draft_id':saved['id'],'topic':topic,'event_key':event_key})
+                occupied_sources.update(s.get('url') for s in saved['sources'])
+                self._log('保存稿已修整并通过检查，入队：'+saved['title']+' / '+slot['scheduled_at'])
+            except NeedsAttention:
+                raise
+            except Exception as exc:
+                self._log('保存稿修整不可用：'+type(exc).__name__+'；保留原稿，不放行发布')
 
     def _records(self):
         ledger = getattr(self.guard, 'ledger', None)
@@ -586,9 +662,18 @@ class MicroRuntime:
             if not self._eligible(now):
                 return
             plan = self.plans.load(now.date()) or self.plans.get_or_create(now)
-            slots = [s for s in plan['slots'] if s['status'] == 'pending' and now < _time(s['scheduled_at']) <= now+timedelta(hours=1)]
+            slots = self._preparation_slots(now)
             if not slots:
                 return
+            if self.ai_tools:
+                self._log('检查未来两小时备稿缺口，优先修整未发布的已保存稿件')
+                try:
+                    await self._recover_review_drafts()
+                except NeedsAttention:
+                    self.pause('保存稿来源需要人工处理登录、验证码或限制')
+                    return
+                slots = self._preparation_slots(self._now())
+                if not slots or not self._eligible(self._now()):return
             seen = set(self.store.setting('micro_seen_sources', []))
             for row in self.queue.history()+self._records():
                 seen.update(s.get('url') for s in row.get('sources', []))
@@ -669,6 +754,22 @@ class MicroRuntime:
                         else:
                             draft = await self.content.generate([material], topic)
                         draft['source_snapshots'] = [material]
+                        repaired_initial = False
+                        if self.ai_tools and draft.get('verify'):
+                            refreshed = await self._refresh(draft)
+                            issues = list(draft['verify'])
+                            draft['quality_repair_attempted'] = True
+                            try:
+                                draft = await self.content.repair(draft,refreshed,topic,issues)
+                                topic = (draft.get('options') or {}).get('topic',topic)
+                                check = await self.content.check(draft,refreshed,topic)
+                            except Exception:
+                                check = {'passed':False,'issues':issues}
+                            if check.get('passed') is not True:
+                                self._save_review_draft(draft,check.get('issues') or issues)
+                                self._log('初稿一次修整后仍待处理：'+'；'.join(check.get('issues') or issues)[:300])
+                                continue
+                            repaired_initial = True
                         verdict = await self.guard.inspect(draft, self._account())
                         if verdict.get('decision') != 'clear':
                             reasons = verdict.get('reasons')
@@ -678,6 +779,8 @@ class MicroRuntime:
                             if verdict.get('decision') == 'duplicate':
                                 self._log('跳过重复事件：' + reason_text)
                             else:
+                                if not draft.get('verify'):
+                                    draft['publication_review_blocked'] = True
                                 self._save_review_draft(draft, reasons)
                                 self._log('已保存待人工处理稿：' + reason_text)
                             continue
@@ -699,6 +802,10 @@ class MicroRuntime:
                         check = await self.content.check(draft, refreshed, topic)
                         if check.get('passed') is not True:
                             issues = check.get('issues') or ['稿件质量检查未通过']
+                            if repaired_initial:
+                                self._save_review_draft(draft,issues)
+                                continue
+                            draft['quality_repair_attempted'] = True
                             try:
                                 revised = await self.content.repair(draft, refreshed, topic, issues)
                                 revised_topic = (revised.get('options') or {}).get('topic')
@@ -723,6 +830,10 @@ class MicroRuntime:
                                 self._log('质量删改不可用，保留原问题待处理')
                         if check.get('passed') is not True:
                             issues = check.get('issues') or ['稿件质量检查未通过']
+                            if self.ai_tools:
+                                self._save_review_draft(draft,issues)
+                                self._log('未通过的稿件仅保留待处理，不占用未来排期')
+                                continue
                             draft['verify'] = list(dict.fromkeys([*(draft.get('verify') or []), *issues]))
                             self._log('模型QA未通过：' + '；'.join(issues)[:500])
                         saved = self.store.save_generated(uuid.uuid4().hex, uuid.uuid4().hex, 1, draft)

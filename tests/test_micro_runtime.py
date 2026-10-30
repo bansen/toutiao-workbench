@@ -170,6 +170,83 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.runtime.queue.items()[0]['topic'],'科技')
         self.assertEqual(guides.call_args.args[-1],20)
         self.assertEqual(news.call_args.args[-1],10)
+    async def test_ai_prepares_two_hour_buffer_and_retries_missing_slots_after_five_minutes(self):
+        self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify();self.runtime.ai_tools=True
+        slots=self.runtime._preparation_slots(self.now)
+        self.assertTrue(slots)
+        self.assertTrue(any(datetime.fromisoformat(s['scheduled_at'])>self.now+timedelta(hours=1) for s in slots))
+        self.runtime._last_prepare=self.now-timedelta(minutes=5)
+        self.assertTrue(self.runtime._preparation_due(self.now))
+        self.runtime._last_prepare=self.now-timedelta(minutes=4)
+        self.assertFalse(self.runtime._preparation_due(self.now))
+
+    async def test_ai_recovers_review_draft_once_before_discovery_and_queues_only_after_checks(self):
+        from unittest.mock import AsyncMock,patch
+        from workbench.ai_tools import PROFILE
+        self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify();self.runtime.ai_tools=True
+        source={'url':'https://www.workbuddy.cn/docs/experts','kind':'official','body':'官方专家中心操作说明',
+                'author':'WorkBuddy 官方文档','content_id':'official:expert','verified_at':self.now.isoformat()}
+        draft=self.store.save_generated('review','source',1,{'title':'专家中心','body':'有来源的具体用途','verify':['标签排版待修整'],
+            'sources':[source],'source_snapshots':[source],'options':{'profile':PROFILE,'topic':'AI'}})
+        self.browser.official_detail=AsyncMock(return_value=source)
+        self.runtime.content.repair=AsyncMock(side_effect=lambda old,*args:{**old,'verify':[],'editorial_review':['标签排版待修整']})
+        self.runtime.content.check=AsyncMock(return_value={'passed':True,'issues':[]})
+        with patch('workbench.micro_runtime.OfficialResearch.discover',new=AsyncMock(return_value=[])),patch('workbench.micro_runtime.TechNewsResearch.discover',new=AsyncMock(return_value=[])):
+            await self.runtime.prepare();await self.runtime.prepare()
+        self.runtime.content.repair.assert_awaited_once()
+        self.assertEqual(len(self.runtime.queue.items()),1)
+        self.assertEqual(self.runtime.queue.items()[0]['status'],'pending')
+        self.assertEqual(self.publisher.calls,0)
+    async def test_ai_initial_verify_gets_one_repair_before_guard_and_failed_qa_does_not_take_slot(self):
+        from unittest.mock import AsyncMock,patch
+        from workbench.ai_tools import PROFILE
+        self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify();self.runtime.ai_tools=True
+        source={'url':'https://www.workbuddy.cn/docs/feature','kind':'official','body':'官方具体功能正文',
+                'author':'WorkBuddy 官方文档','content_id':'official:feature','verified_at':self.now.isoformat()}
+        self.browser.official_detail=AsyncMock(return_value=source)
+        draft={'title':'具体功能','body':'有依据的用法','verify':['正文没有采用的价格未披露'],'sources':[source],
+               'options':{'profile':PROFILE,'topic':'AI'}}
+        self.runtime.content.generate=AsyncMock(return_value=draft)
+        self.runtime.content.repair=AsyncMock(side_effect=lambda old,*args:{**old,'verify':[]})
+        self.runtime.content.check=AsyncMock(return_value={'passed':True,'issues':[]})
+        async def inspect(candidate,*args):
+            self.assertEqual(candidate['verify'],[])
+            return {'decision':'clear'}
+        self.guard.inspect=inspect
+        with patch('workbench.micro_runtime.OfficialResearch.discover',new=AsyncMock(return_value=[('AI','official',source)])),patch('workbench.micro_runtime.TechNewsResearch.discover',new=AsyncMock(return_value=[])):
+            await self.runtime.prepare()
+        self.runtime.content.repair.assert_awaited_once()
+        self.assertEqual(self.runtime.queue.items()[0]['status'],'pending')
+
+    async def test_ai_failed_quality_review_preserves_draft_without_occupying_future_slot(self):
+        from unittest.mock import AsyncMock,patch
+        from workbench.ai_tools import PROFILE
+        self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify();self.runtime.ai_tools=True
+        source={'url':'https://www.workbuddy.cn/docs/unverified','kind':'official','body':'官方资料正文',
+                'author':'WorkBuddy 官方文档','content_id':'official:unverified','verified_at':self.now.isoformat()}
+        self.browser.official_detail=AsyncMock(return_value=source)
+        self.runtime.content.generate=AsyncMock(return_value={'title':'功能待查','body':'存在核心疑点','verify':[],
+            'sources':[source],'options':{'profile':PROFILE,'topic':'AI'}})
+        self.runtime.content.repair=AsyncMock(side_effect=lambda old,*args:{**old,'verify':['核心事实缺少证据']})
+        self.runtime.content.check=AsyncMock(return_value={'passed':False,'issues':['核心事实缺少证据']})
+        with patch('workbench.micro_runtime.OfficialResearch.discover',new=AsyncMock(return_value=[('AI','official',source)])),patch('workbench.micro_runtime.TechNewsResearch.discover',new=AsyncMock(return_value=[])):
+            await self.runtime.prepare()
+        self.assertEqual(self.runtime.queue.items(),[])
+        self.assertTrue(self.store.drafts()[0]['verify'])
+        self.assertTrue(self.runtime._preparation_slots(self.now))
+        self.runtime.content.repair.assert_awaited_once()
+    async def test_review_recovery_does_not_rewrite_history_uncertainty(self):
+        from unittest.mock import AsyncMock
+        from workbench.ai_tools import PROFILE
+        self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify();self.runtime.ai_tools=True
+        self.store.save_generated('uncertain','source',1,{'title':'事件待查','body':'稿件',
+            'verify':['事件是否重复尚不明确，须人工核实'],'sources':[{'url':'https://www.workbuddy.cn/docs/event','kind':'official'}],
+            'options':{'profile':PROFILE,'topic':'AI'}})
+        self.browser.official_detail=AsyncMock()
+        self.runtime.content.repair=AsyncMock()
+        await self.runtime._recover_review_drafts()
+        self.runtime.content.repair.assert_not_awaited()
+        self.browser.official_detail.assert_not_awaited()
     async def test_restart_publishing_becomes_uncertain_and_pauses(self):
         row,_=self.enqueue(); self.runtime.queue.update(row['id'],{'status':'publishing'})
         self.runtime.plans.update_slot(row['slot_id'],{'status':'publishing'})
