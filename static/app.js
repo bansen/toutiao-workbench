@@ -200,7 +200,7 @@ function renderPublishing(config) {
   const counts=config.counts||{},slots=config.today?.slots||[];
   const stats=[['今日目标',config.today?.target||0],['已提交',config.submitted_total??((counts.submitted||0)+(counts.published||0)+(counts.rejected||0))],['已发布',config.published_total??(counts.published||0)],['已跳过',slots.filter(s=>s.status==='skipped').length],['待核实',counts.uncertain||0]];
   if(config.editorial_profile==='ai-tools-v1'&&config.today?.content_mix){
-    stats.push(['新闻计划',config.today.content_mix.news],['工具计划',config.today.content_mix['tool-guide']],['新闻已提交',config.content_mix_submitted?.news||0]);
+    stats.push(['新闻计划',config.today.content_mix.news],['工具计划',config.today.content_mix['tool-guide']],['定时新闻已提交',config.content_mix_submitted?.news||0]);
   }
   $('publishing-stats').innerHTML=stats.map(([label,value])=>`<span>${esc(label)}<b>${esc(value)}</b></span>`).join('');
   $('publishing-next').textContent='下一排期：'+(config.next_at?dateText(config.next_at):'今天没有未来排期')+' · 程序'+(config.service_active?'正在运行':'未启动');
