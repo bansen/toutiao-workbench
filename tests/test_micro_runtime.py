@@ -77,6 +77,20 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.publisher.calls,1)
         self.assertEqual(self.runtime.queue.get(row['id'])['status'],'submitted')
         self.assertTrue(self.browser.publishing_idle.is_set())
+    async def test_prepublication_check_preserves_specific_issues_without_submitting(self):
+        row,_=self.enqueue(); await self.runtime.verify()
+        async def fail(*args):
+            return {'passed':False,'issues':['来源中的日期发生变化']}
+        self.runtime.content.check=fail
+        await self.runtime.tick()
+        failed=self.runtime.queue.get(row['id'])
+        self.assertEqual(failed['status'],'failed')
+        self.assertEqual(failed['prepublication_check']['issues'],['来源中的日期发生变化'])
+        self.assertIn('来源中的日期发生变化',failed['reason'])
+        slot=next(s for s in self.runtime.plans.load(self.now.date())['slots'] if s['id']==row['slot_id'])
+        self.assertEqual(slot['reason'],failed['reason'])
+        self.assertIn('来源中的日期发生变化',self.store.setting('publishing_logs',[])[-1]['message'])
+        self.assertEqual(self.publisher.calls,0)
     async def test_pause_after_preflight_blocks_final_click(self):
         row,_=self.enqueue(); await self.runtime.verify()
         self.publisher.preflight_hook=lambda:self.runtime.pause('manual')

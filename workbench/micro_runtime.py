@@ -336,8 +336,11 @@ class MicroRuntime:
             sources = await self._refresh(draft, priority=True)
             check = await self.content.check({**row, 'source_snapshots': draft.get('source_snapshots', []), 'editorial_review':draft.get('editorial_review', [])}, sources, row['topic'])
             if check.get('passed') is not True:
-                self.queue.update(row['id'], {'status': 'failed', 'reason': '发布前来源检查未通过'})
-                self.plans.update_slot(slot['id'], {'status': 'skipped', 'reason': '发布前来源检查未通过'})
+                issues = [v for v in check.get('issues', []) if isinstance(v, str) and v.strip()]
+                reason = '发布前来源检查未通过：' + ('；'.join(issues) or '检查结果不可用')
+                self.queue.update(row['id'], {'status': 'failed', 'reason': reason, 'prepublication_check': check})
+                self.plans.update_slot(slot['id'], {'status': 'skipped', 'reason': reason})
+                self._log(reason)
                 return
             self._active_slot, self._active_hash = slot, body_hash(row['body'])
             self._active_account, self._active_row = self._account(), row

@@ -24,7 +24,7 @@ _TRANSITIONS = {
     'skipped': set(), 'cancelled': set(),
 }
 _SNAPSHOT_FIELDS = ('title', 'body', 'sources', 'verify', 'draft_id')
-_UPDATE_FIELDS = {'status', 'reason', 'receipt', 'publication_id', 'confirmed_sha256'}
+_UPDATE_FIELDS = {'status', 'reason', 'receipt', 'publication_id', 'confirmed_sha256', 'prepublication_check'}
 
 
 class MicroQueue:
