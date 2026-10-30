@@ -1,7 +1,7 @@
 """Bounded discovery of recent technology news using rendered search cards."""
 from datetime import datetime, timedelta
 
-from .ai_tools import NEWS_KEYWORDS
+from .ai_tools import NEWS_KEYWORDS, NEWS_CATEGORIES
 from .parsing import canonical_url
 
 
@@ -12,7 +12,7 @@ class TechNewsResearch:
     async def discover(self, exclude, now, limit=10):
         cursor = int(self.store.setting('tech_news_cursor', 0)) % len(NEWS_KEYWORDS)
         found, seen = [], set(exclude)
-        for offset in range(len(NEWS_KEYWORDS)):
+        for offset in range(min(5, len(NEWS_KEYWORDS))):
             if len(found) >= limit:
                 break
             index = (cursor+offset) % len(NEWS_KEYWORDS)
@@ -41,16 +41,18 @@ class TechNewsResearch:
                     except (ValueError, TypeError):
                         continue
                 seen.add(url)
-                found.append(('科技', 'article', {**card, 'url':url}))
+                category = NEWS_CATEGORIES.get(word, 'tech')
+                topic = {'hot':'热点', 'business':'商业', 'tech':'科技'}[category]
+                found.append((topic, 'article', {**card, 'url':url, 'news_category':category}))
         return found
 
 
 def mix_candidates(guides, news):
-    """Prefer guides, interleave news; use either when the other is unavailable."""
+    """Alternate news and guides; slot allocation independently enforces quotas."""
     guides, news = list(guides), list(news)
     result = []
     while guides or news:
-        if news and (not guides or len(result) % 3 == 1):
+        if news and (not guides or len(result) % 2 == 0):
             result.append(news.pop(0))
         elif guides:
             result.append(guides.pop(0))

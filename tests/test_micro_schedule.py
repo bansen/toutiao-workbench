@@ -19,7 +19,7 @@ class MicroScheduleTests(unittest.TestCase):
             with self.subTest(seed=seed):
                 plan = micro_schedule.generate_daily_plan(DAY, random.Random(seed))
                 seen_targets.add(plan['target'])
-                self.assertEqual(set(plan), {'date', 'timezone', 'target', 'slots'})
+                self.assertEqual(set(plan), {'date', 'timezone', 'target', 'slots', 'content_mix'})
                 self.assertEqual(plan['date'], DAY.isoformat())
                 self.assertEqual(plan['timezone'], 'Asia/Shanghai')
                 self.assertTrue(24 <= plan['target'] <= 30)
@@ -30,7 +30,7 @@ class MicroScheduleTests(unittest.TestCase):
                 end = start + timedelta(hours=14)
                 width = (end - start) / plan['target']
                 for index, (slot, scheduled) in enumerate(zip(plan['slots'], times)):
-                    self.assertEqual(set(slot), {'id', 'scheduled_at', 'status'})
+                    self.assertEqual(set(slot), {'id', 'scheduled_at', 'status', 'content_type'})
                     self.assertEqual(slot['status'], 'pending')
                     self.assertEqual(scheduled.utcoffset(), timedelta(hours=8))
                     self.assertGreaterEqual(scheduled, start + width * (index + .3))

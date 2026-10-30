@@ -9,6 +9,7 @@ from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 from random import Random
 from zoneinfo import ZoneInfo
+from .content_mix import assign_content_mix
 
 
 TIMEZONE = ZoneInfo('Asia/Shanghai')
@@ -44,7 +45,7 @@ def generate_daily_plan(day_or_now: date | datetime, rng: Random) -> dict:
             'scheduled_at': scheduled.isoformat(),
             'status': 'skipped' if now is not None and scheduled < now else 'pending',
         })
-    return {'date': day.isoformat(), 'timezone': TIMEZONE.key, 'target': target, 'slots': slots}
+    return assign_content_mix({'date': day.isoformat(), 'timezone': TIMEZONE.key, 'target': target, 'slots': slots})
 
 
 def expire_missed_slots(plan: dict, now: datetime) -> dict:

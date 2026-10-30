@@ -43,6 +43,36 @@ class Content:
         assert not self.browser.lock.locked()
         return {'passed':True,'issues':[]}
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_incorrect_type_in_news_queue_is_not_submitted(self):
+        from workbench.ai_tools import PROFILE
+        self.plan(); await self.runtime.verify(); self.runtime.ai_tools=True
+        draft=self.store.save_generated('bad-mix','source',1,{'title':'工具稿','body':'正文','verify':[],
+            'options':{'profile':PROFILE},'sources':[{'kind':'official','url':'https://www.workbuddy.cn/docs/feature'}]})
+        row=self.runtime.queue.add(self.slot,draft,'AI','event')
+        self.runtime.plans.update_slot(self.slot['id'],{'status':'queued','queue_id':row['id']})
+        await self.runtime.tick()
+        self.assertEqual(self.publisher.calls,0)
+        self.assertEqual(self.runtime.queue.get(row['id'])['status'],'skipped')
+        self.assertIn('50%',self.runtime.queue.get(row['id'])['reason'])
+
+    async def test_news_slot_is_not_filled_with_tool_guide(self):
+        from unittest.mock import AsyncMock, patch
+        from workbench.ai_tools import PROFILE
+        self.plan(); self.now -= timedelta(minutes=5)
+        await self.runtime.verify(); self.runtime.ai_tools = True
+        source = {'url':'https://www.workbuddy.cn/docs/test-feature','kind':'official','body':'官方功能正文',
+                  'author':'WorkBuddy 官方文档','content_id':'official:feature','verified_at':self.now.isoformat()}
+        self.browser.official_detail = AsyncMock(return_value=source)
+        self.runtime.content.generate = AsyncMock(return_value={'title':'具体功能','body':'有依据的具体功能正文',
+            'verify':[],'sources':[source],'options':{'profile':PROFILE,'topic':'AI'}})
+        with patch('workbench.micro_runtime.OfficialResearch.discover',new=AsyncMock(return_value=[('AI','official',source)])), patch('workbench.micro_runtime.TechNewsResearch.discover',new=AsyncMock(return_value=[])):
+            await self.runtime.prepare()
+        rows = self.runtime.queue.items()
+        self.assertEqual(len(rows),1)
+        plan = self.runtime.plans.load(self.now.date())
+        slot = next(s for s in plan['slots'] if s['id']==rows[0]['slot_id'])
+        self.assertEqual(slot.get('content_type'),'tool-guide')
+        self.assertEqual(plan['slots'][0]['status'],'pending')
     async def asyncSetUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.store=Store(Path(self.tmp.name)/'db'); self.store.set_setting('publishing_account',{'id':'account'})

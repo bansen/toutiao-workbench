@@ -23,7 +23,9 @@ class TechNewsTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result=await TechNewsResearch(Store(Path(tmp)/'db'),search).discover({seen},now,limit=2)
         self.assertEqual([v[2]['url'] for v in result],[fresh,unknown])
-        self.assertTrue(all(v[0]=='科技' and v[1]=='article' for v in result))
+        self.assertEqual([v[0] for v in result], ['热点','商业'])
+        self.assertEqual([v[2]['news_category'] for v in result], ['hot','business'])
+        self.assertTrue(all(v[1]=='article' for v in result))
         self.assertLessEqual(len(calls),5)
         self.assertTrue(all(v[1]<=2 and v[3]==now-timedelta(hours=24) for v in calls))
         self.assertIn(fresh,calls[1][2])
@@ -38,6 +40,6 @@ class TechNewsTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(search.await_count,5)
 
     async def test_mix_preserves_guides_and_interleaves_news_without_dropping_sources(self):
-        self.assertEqual(mix_candidates(['g1','g2','g3'],['n1','n2']),['g1','n1','g2','g3','n2'])
+        self.assertEqual(mix_candidates(['g1','g2','g3'],['n1','n2']),['n1','g1','n2','g2','g3'])
         self.assertEqual(mix_candidates([],['n1']),['n1'])
         self.assertEqual(mix_candidates(['g1'],[]),['g1'])

@@ -18,6 +18,20 @@ SOURCE={'url':'https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-G
 BODY=format_post(BODY)
 
 class AiToolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_business_news_keeps_its_category_and_supported_source(self):
+        now=datetime.now(timezone.utc).isoformat()
+        source={'url':'https://www.toutiao.com/article/7701979050666902079/','title':'公司合作公告',
+                'author':'经济日报','body':'甲公司与乙公司宣布成立联合研发中心，计划开发仓储设备。',
+                'kind':'article','published_at':now,'collected_at':now,'news_category':'business'}
+        body='两家公司把合作落在联合研发中心\n\n据经济日报报道，甲公司与乙公司宣布成立联合研发中心，计划开发仓储设备。\n\n#商业新闻 #企业合作 #产业动态'
+        service=AiToolContent(None);service.request=AsyncMock(return_value={'title':body.splitlines()[0],'body':body,'verify':[]})
+        draft=await service.generate([source],'商业')
+        self.assertEqual(draft['options']['topic'],'商业')
+        self.assertEqual(draft['options']['news_category'],'business')
+        self.assertEqual(draft['sources'][0]['news_category'],'business')
+        service.request=AsyncMock(return_value={'passed':True,'issues':[]})
+        self.assertTrue((await service.check(draft,[source],'商业'))['passed'])
+
     async def test_dense_model_output_is_formatted_before_validation(self):
         dense=BODY.replace('\n\n','\n')
         service=AiToolContent(None);service.request=AsyncMock(return_value={'title':BODY.splitlines()[0],'body':dense,'verify':[]})

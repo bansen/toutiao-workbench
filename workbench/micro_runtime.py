@@ -14,9 +14,11 @@ from .micro_schedule import TIMEZONE
 from .publication_ledger import body_hash, _canonical_source
 from .ai_tools import PROFILE, AiToolContent, OfficialResearch, news_source_issues
 from .tech_news import TechNewsResearch, mix_candidates
+from .content_mix import content_kind, NEWS, GUIDE
 
 POSSIBLE = {'reserved', 'submitting', 'submitted', 'published', 'uncertain', 'rejected'}
 DEFAULT_KEYWORDS = {'民生': ['民生'], 'AI': ['人工智能'], '科技': ['科技']}
+PUBLISH_TOPICS = (*TOPICS, '热点', '商业')
 
 
 def _time(value):
@@ -214,6 +216,12 @@ class MicroRuntime:
         interval = timedelta(minutes=5) if self.ai_tools else timedelta(hours=1)
         return bool(self._preparation_slots(now)) and (self._last_prepare is None or now-self._last_prepare>=interval)
 
+    def _content_slots(self, slots, draft):
+        if not self.ai_tools:
+            return slots
+        kind = content_kind(draft)
+        return [s for s in slots if not s.get('content_type') or s['content_type']==kind]
+
     async def _recover_review_drafts(self):
         now = self._now()
         attempts = self.store.setting('micro_review_repaired', {}) or {}
@@ -236,6 +244,8 @@ class MicroRuntime:
             if not self._eligible(self._now()) or not self._preparation_slots(self._now()):
                 break
             if any(s.get('url') in occupied_sources for s in old.get('sources', [])):
+                continue
+            if not self._content_slots(self._preparation_slots(self._now()), old):
                 continue
             origin = old.get('recovery_origin') or old['id']
             try:
@@ -266,7 +276,7 @@ class MicroRuntime:
                     self._save_review_draft(fixed,['修整稿与队列重复或无法确定'])
                     continue
                 saved = self.store.save_generated(uuid.uuid4().hex,uuid.uuid4().hex,1,fixed)
-                slots = self._preparation_slots(self._now())
+                slots = self._content_slots(self._preparation_slots(self._now()), saved)
                 if not slots or not self._eligible(self._now()):break
                 slot = slots[0]
                 event_key=hashlib.sha256('\n'.join(sorted(_canonical_source(s['url']) for s in saved['sources'])).encode()).hexdigest()
@@ -320,6 +330,8 @@ class MicroRuntime:
         if not self._active_slot or not self._eligible(now):
             return False
         slot = self._active_slot
+        if not self._content_slots([slot], self._active_row):
+            return False
         if self._account() != self._active_account:
             return False
         try:
@@ -350,7 +362,9 @@ class MicroRuntime:
         pause = self.store.setting('publishing_pause', {})
         future = [s['scheduled_at'] for s in plan['slots'] if s['status'] in {'pending', 'queued', 'awaiting_confirmation'} and _time(s['scheduled_at']) >= now]
         ready, enabled = self._ready(), self._enabled()
+        mix_rows = [r for r in rows if r['scheduled_at'].startswith(plan.get('date','!')) and r['status'] in {'submitted','published','rejected'}]
         return {'enabled': enabled, 'ready': ready, 'running': self._running,
+                'content_mix_submitted': {kind:sum(content_kind(r)==kind for r in mix_rows) for kind in (NEWS,GUIDE)},
                 'state': 'paused' if pause.get('paused') else ('disabled' if not enabled else (('ready' if 8 <= now.hour < 22 else 'idle') if ready else 'unverified')),
                 'reason': pause.get('reason', '') if pause.get('paused') else (('' if 8 <= now.hour < 22 else '等待北京时间08:00发布窗口') if ready else ('模型配置缺失，请先配置模型' if not self._model_ready() else '请先核实发布账号与声明')),
                 'paused': bool(pause.get('paused')), 'today': plan,
@@ -387,6 +401,8 @@ class MicroRuntime:
                 row = await self._browser_step(method, source['url'], detail_arg)
             if not isinstance(row, dict) or not row.get('body', row.get('content', '')).strip():
                 raise ValueError('来源正文不可见')
+            if source.get('news_category'):
+                row['news_category'] = source['news_category']
             refreshed.append(row)
         return refreshed
 
@@ -416,6 +432,9 @@ class MicroRuntime:
                     continue
                 if not row or row['status'] != 'pending':
                     self._skip(slot['id'], row, '当前排期没有通过检查的稿件')
+                    continue
+                if not self._content_slots([slot], row):
+                    self._skip(slot['id'], row, '稿件类别不符合本时段的新闻50%配额')
                     continue
                 if not self._within_limits(now, plan['target']):
                     self._skip(slot['id'], row, '达到每日上限或不足15分钟间隔')
@@ -545,16 +564,17 @@ class MicroRuntime:
             draft = self.store.draft(draft_id)
             if self.ai_tools and (draft.get('options') or {}).get('profile') != PROFILE:
                 raise ValueError('当前仅发布新版AI工具内容，请重新生成草稿')
-            if topic not in TOPICS or not self._ready() or self._closed:
+            if topic not in (PUBLISH_TOPICS if self.ai_tools else TOPICS) or not self._ready() or self._closed:
                 raise ValueError('选题无效或发布服务尚未就绪')
             if hashlib.sha256(draft.get('body', '').encode()).hexdigest() != sha or draft.get('verify'):
                 raise ValueError('正文哈希不一致或仍有待核实事项')
             plan = self.plans.load(now.date()) or self.plans.get_or_create(now)
             occupied = {row['slot_id'] for row in self.queue.items()}
             slots = [slot for slot in plan['slots'] if slot['status'] == 'pending' and slot['id'] not in occupied
-                     and now < _time(slot['scheduled_at']) <= now + timedelta(hours=1)]
+                     and now < _time(slot['scheduled_at']) <= now + timedelta(hours=2 if self.ai_tools else 1)]
+            slots = self._content_slots(slots, draft)
             if not slots:
-                raise ValueError('未来一小时内没有空闲排期')
+                raise ValueError('备稿窗口内没有符合稿件类别配额的空闲排期')
             slot = min(slots, key=lambda value: value['scheduled_at'])
             account = self._account()
             refreshed = await self._refresh(draft)
@@ -680,7 +700,7 @@ class MicroRuntime:
             keywords = self.store.setting('publishing_keywords', DEFAULT_KEYWORDS) or DEFAULT_KEYWORDS
             candidates = []
             discovered = {url for url in seen if isinstance(url,str)}
-            self._log('开始本轮AI工具与科技新闻备稿：官方资料额度20，新闻候选额度10' if self.ai_tools else '开始本轮自动备稿：民生 / AI / 科技，总候选额度30')
+            self._log('开始本轮AI工具与新闻50%配额备稿：官方资料额度20，热点/商业/科技新闻候选额度10' if self.ai_tools else '开始本轮自动备稿：民生 / AI / 科技，总候选额度30')
             try:
                 if self.ai_tools:
                     async def read_official(url, product):
@@ -719,12 +739,14 @@ class MicroRuntime:
                                             self._log('列表时间未知，将在详情页核实')
                                     else:
                                         self._log('跳过候选：发布时间缺失、过期或在未来')
-                self._log(('发现AI工具与科技新闻候选：' + str(len(candidates)) + ' 条，新闻将在详情页核实时效与来源') if self.ai_tools else ('发现候选：' + str(len(candidates)) + ' 条，列表时间未知的将核实详情'))
+                self._log(('发现AI工具与新闻候选：' + str(len(candidates)) + ' 条，新闻将在详情页核实时效与来源') if self.ai_tools else ('发现候选：' + str(len(candidates)) + ' 条，列表时间未知的将核实详情'))
                 if not self.ai_tools:
                     candidates.sort(key=lambda v: (v[2].get('comments') or 0, v[2].get('likes') or 0, _time(v[2].get('published_at')) or datetime.min.replace(tzinfo=TIMEZONE)), reverse=True)
                 for topic, kind, card in candidates[:30]:
                     if not slots or not self._eligible(self._now()):
                         break
+                    if not self._content_slots(slots, {'sources':[{**card,'kind':kind}]}):
+                        continue
                     try:
                         url = _canonical_source(card['url'])
                         if url in seen:
@@ -733,7 +755,7 @@ class MicroRuntime:
                         seen.add(url)
                         self.store.set_setting('micro_seen_sources', sorted(seen))
                         item = card if kind == 'official' else await self._browser_step(self.browser.detail, url, kind)
-                        for key in ('published_at', 'author', 'comments', 'likes'):
+                        for key in ('published_at', 'author', 'comments', 'likes', 'news_category'):
                             if item.get(key) in (None, ''):
                                 item[key] = card.get(key)
                         stamp = _time(item.get('published_at'))
@@ -744,7 +766,7 @@ class MicroRuntime:
                             self._log('跳过候选：来源正文缺失或不可见')
                             continue
                         if self.ai_tools and kind != 'official' and news_source_issues(item, self._now()):
-                            self._log('跳过科技新闻：来源不在可靠媒体范围，或缺少有效时间与正文')
+                            self._log('跳过新闻：来源不在可靠媒体范围，或缺少有效时间与正文')
                             continue
                         item['metrics_source'] = card.get('search_url', url)
                         material, _ = self.store.upsert_material(item)
@@ -809,7 +831,7 @@ class MicroRuntime:
                             try:
                                 revised = await self.content.repair(draft, refreshed, topic, issues)
                                 revised_topic = (revised.get('options') or {}).get('topic')
-                                if revised_topic not in TOPICS:
+                                if revised_topic not in (PUBLISH_TOPICS if self.ai_tools else TOPICS):
                                     raise ValueError('删改后的选题无效')
                                 draft, topic = revised, revised_topic
                                 check = await self.content.check(draft, refreshed, topic)
@@ -845,10 +867,12 @@ class MicroRuntime:
                         occupied = {r['slot_id'] for r in self.queue.items()}
                         slots = [s for s in slots if s['id'] in free and s['id'] not in occupied
                                  and _time(s['scheduled_at']) > current_now]
-                        if not slots or not self._eligible(current_now):
+                        matching_slots = self._content_slots(slots, saved)
+                        if not matching_slots or not self._eligible(current_now):
                             self._log('草稿已保存，本轮没有可用的未来排期，不补发')
                             break
-                        slot = slots.pop(0)
+                        slot = matching_slots[0]
+                        slots = [s for s in slots if s['id'] != slot['id']]
                         event_key = hashlib.sha256('\n'.join(sorted(_canonical_source(s['url']) for s in draft['sources'])).encode()).hexdigest()
                         status = 'pending' if check.get('passed') is True else 'awaiting_confirmation'
                         row = self.queue.add(slot, saved, topic, event_key, status=status)

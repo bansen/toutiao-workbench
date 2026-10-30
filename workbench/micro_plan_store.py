@@ -7,6 +7,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 
 from .micro_schedule import expire_missed_slots, generate_daily_plan, TIMEZONE
+from .content_mix import assign_content_mix, content_kind
 
 
 class MicroPlanStore:
@@ -39,6 +40,12 @@ class MicroPlanStore:
                 db.execute('UPDATE micro_daily_plans SET payload=? WHERE day=?',(self.store.dump(expired),old['day']))
             row=db.execute('SELECT payload FROM micro_daily_plans WHERE day=?',(day,)).fetchone()
             plan=json.loads(row[0]) if row else generate_daily_plan(now,rng if rng is not None else random.SystemRandom())
+            if not plan.get('content_mix'):
+                fixed = {}
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='micro_publish_queue'").fetchone():
+                    fixed = {item['slot_id']:content_kind(item) for record in db.execute('SELECT payload FROM micro_publish_queue')
+                             if (item:=json.loads(record[0]))['scheduled_at'].startswith(day)}
+                plan=assign_content_mix(plan, fixed)
             plan=expire_missed_slots(plan,now)
             db.execute('INSERT INTO micro_daily_plans VALUES(?,?) ON CONFLICT(day) DO UPDATE SET payload=excluded.payload',
                        (day,self.store.dump(plan)))

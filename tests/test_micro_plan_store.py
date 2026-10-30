@@ -12,6 +12,27 @@ TZ=ZoneInfo('Asia/Shanghai')
 
 
 class DailyPlanStoreTests(unittest.TestCase):
+    def test_existing_plan_gets_news_allocation_without_redrawing_or_retagging_queue(self):
+        from workbench.micro_queue import MicroQueue
+        with tempfile.TemporaryDirectory() as tmp:
+            store=Store(Path(tmp)/'db');plans=MicroPlanStore(store)
+            now=datetime(2026,10,31,7,tzinfo=TZ)
+            old=plans.get_or_create(now,random.Random(4))
+            draft=store.save_generated('t','s',1,{'title':'工具稿','body':'正文','verify':[],
+                'sources':[{'kind':'official','url':'https://www.workbuddy.cn/docs/feature'}]})
+            row=MicroQueue(store).add(old['slots'][0],draft,'AI','event')
+            old=plans.update_slot(row['slot_id'],{'status':'queued','queue_id':row['id']})
+            old.pop('content_mix')
+            for slot in old['slots']:slot.pop('content_type')
+            with store.connection() as db:
+                db.execute('UPDATE micro_daily_plans SET payload=? WHERE day=?',(store.dump(old),old['date']))
+            new=plans.get_or_create(now,random.Random(99))
+            self.assertEqual(new['target'],old['target'])
+            self.assertEqual([s['scheduled_at'] for s in new['slots']],[s['scheduled_at'] for s in old['slots']])
+            self.assertEqual(new['slots'][0]['content_type'],'tool-guide')
+            self.assertEqual(new['slots'][0]['queue_id'],row['id'])
+            self.assertEqual(new['content_mix']['news'],(new['target']+1)//2)
+            self.assertEqual(plans.get_or_create(now,random.Random(2)),new)
     def test_plan_survives_reopen_without_new_random_draw(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'workbench.db'
