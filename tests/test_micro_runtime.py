@@ -163,7 +163,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.runtime.status()['ready']); self.assertTrue(self.runtime.status()['paused'])
     async def test_preparation_persists_original_sources_and_never_reuses_origin(self):
         self.plan(); self.now-=timedelta(minutes=5); await self.runtime.verify()
-        async def search(word,kind,limit):
+        async def search(word,kind,limit,exclude_urls=None,since=None):
             return [{'url':'https://www.toutiao.com/article/123456789012/','published_at':self.now.isoformat(),'comments':99,'likes':7}]
         self.browser.search=search
         async def generate(sources,topic):
@@ -399,7 +399,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('跳过排期',str(self.store.setting('publishing_logs')))
     async def test_guard_review_keeps_paid_generated_draft_with_sources_without_queue(self):
         self.plan(); self.now-=timedelta(minutes=5); await self.runtime.verify()
-        async def search(word,kind,limit):
+        async def search(word,kind,limit,exclude_urls=None,since=None):
             return [{'url':'https://www.toutiao.com/article/123456789012/','published_at':self.now.isoformat()}]
         async def generate(sources,topic):
             return {'title':'可人工处理的稿件','body':'已经生成的正文','sources':[{'url':sources[0]['url']}],'verify':['原待核实项']}
@@ -416,7 +416,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('待人工处理',logs); self.assertIn('历史回执尚未核实',logs); self.assertIn('来源已处理',logs)
     async def test_guard_duplicate_logs_reason_without_saving_review_or_queue(self):
         self.plan(); self.now-=timedelta(minutes=5); await self.runtime.verify()
-        async def search(word,kind,limit): return [{'url':'https://www.toutiao.com/article/123456789012/','published_at':self.now.isoformat()}]
+        async def search(word,kind,limit,exclude_urls=None,since=None): return [{'url':'https://www.toutiao.com/article/123456789012/','published_at':self.now.isoformat()}]
         async def generate(sources,topic): return {'title':'同事件','body':'已生成','sources':[{'url':sources[0]['url']}],'verify':[]}
         async def duplicate(*args): return {'decision':'duplicate','reasons':['同一事件已有发布记录']}
         self.browser.search=search; self.runtime.content.generate=generate; self.guard.inspect=duplicate
@@ -559,3 +559,35 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.runtime.prepare()
         self.runtime.content.generate.assert_not_awaited()
         self.assertEqual(self.runtime.queue.items(),[])
+
+    async def test_prepare_search_advances_past_processed_sources(self):
+        self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify()
+        old='https://www.toutiao.com/article/123456789011/'
+        new='https://www.toutiao.com/article/123456789012/'
+        self.store.set_setting('micro_seen_sources',[old]);calls=[]
+        async def search(word,kind,limit,exclude_urls=None,since=None):
+            calls.append((exclude_urls,since))
+            url=new if old in (exclude_urls or []) else old
+            return [] if url in (exclude_urls or []) else [{'url':url,'published_at':self.now.isoformat()}]
+        self.browser.search=search
+        async def generate(sources,topic):return {'title':'新事件','body':'有来源的新事件','sources':[{'url':sources[0]['url']}],'verify':[]}
+        self.runtime.content.generate=generate
+        await self.runtime.prepare()
+        self.assertEqual(len(self.runtime.queue.items()),1)
+        self.assertTrue(all(old in excluded and since==self.now-timedelta(hours=24) for excluded,since in calls))
+        self.assertEqual(self.runtime.queue.items()[0]['sources'][0]['url'],new)
+
+    async def test_slow_generation_uses_next_future_slot_not_expired_slot(self):
+        first=self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify()
+        async def search(*args):return [{'url':'https://www.toutiao.com/article/123456789012/','published_at':self.now.isoformat()}]
+        self.browser.search=search
+        async def generate(sources,topic):
+            self.now=datetime.fromisoformat(first['scheduled_at'])+timedelta(minutes=2)
+            await self.runtime.tick()
+            return {'title':'新事件','body':'有来源的新事件','sources':[{'url':sources[0]['url']}],'verify':[]}
+        self.runtime.content.generate=generate
+        await self.runtime.prepare()
+        rows=self.runtime.queue.items()
+        self.assertEqual(len(rows),1)
+        self.assertGreater(datetime.fromisoformat(rows[0]['scheduled_at']),self.now)
+        self.assertNotEqual(rows[0]['slot_id'],first['id'])

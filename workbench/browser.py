@@ -3,7 +3,8 @@ import asyncio
 import re
 import shutil
 from pathlib import Path
-from urllib.parse import urlencode
+from datetime import datetime
+from urllib.parse import urlencode, urljoin, urlsplit
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
@@ -157,13 +158,19 @@ class Browser:
                 raise NeedsAttention(self.blocked(text))
             raise ValueError('页面未出现可识别的正文或搜索结果；可能暂无结果、页面改版或内容不可用') from None
 
-    async def search(self, keyword, kind='article', limit=30):
+    async def search(self, keyword, kind='article', limit=30, exclude_urls=None, since=None):
         await self.start()
         page = await self.context.new_page()
         results, seen = [], set()
+        for value in exclude_urls or []:
+            try:seen.add(canonical_url(value))
+            except (ValueError,TypeError,AttributeError):continue
+        visited=set()
         try:
             url = 'https://so.toutiao.com/search/?'+urlencode({'keyword':keyword,'pd':'information' if kind=='article' else 'weitoutiao','dvpf':'pc'})
             for number in range(4):
+                if url in visited:break
+                visited.add(url)
                 try:
                     await self.navigate(page,url,'.result-content a[href*="/search/jump"], .result-content a[href*="/article/"], .result-content a[href*="/w/"]')
                 except ValueError:
@@ -180,6 +187,8 @@ class Browser:
                     if link in seen:
                         continue
                     seen.add(link)
+                    if since is not None and item.get('published_at') and datetime.fromisoformat(item['published_at'])<since:
+                        continue
                     results.append(item)
                     if len(results)>=limit:
                         return results
@@ -189,7 +198,11 @@ class Browser:
                 href = await next_link.first.get_attribute('href')
                 if not href:
                     break
-                url = href.replace('http://','https://',1)
+                target=urljoin(url,href).replace('http://','https://',1)
+                parsed=urlsplit(target)
+                if parsed.scheme!='https' or parsed.hostname not in {'so.toutiao.com','sou.toutiao.com'} or parsed.username or parsed.path.rstrip('/')!='/search':
+                    break
+                url=target
             return results
         finally:
             await page.close()

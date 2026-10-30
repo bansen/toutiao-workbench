@@ -560,6 +560,7 @@ class MicroRuntime:
                 seen.update(s.get('url') for s in row.get('sources', []))
             keywords = self.store.setting('publishing_keywords', DEFAULT_KEYWORDS) or DEFAULT_KEYWORDS
             candidates = []
+            discovered = {url for url in seen if isinstance(url,str)}
             self._log('开始本轮自动备稿：民生 / AI / 科技，总候选额度30')
             try:
                 for topic in TOPICS:
@@ -569,11 +570,19 @@ class MicroRuntime:
                         for index, word in enumerate(words[:5]):
                             budget = 5//len(words[:5]) + (index < 5 % len(words[:5]))
                             try:
-                                found = await self._browser_step(self.browser.search, word, kind, budget)
+                                found = await self._browser_step(self.browser.search, word, kind, budget, sorted(discovered), now-timedelta(hours=24))
                             except ValueError:
                                 self._log('此组合未取得结果，继续搜索：' + topic + ' / ' + kind)
                                 continue
+                            if not found:
+                                self._log('搜索无新候选：' + topic + ' / ' + kind)
                             for card in found[:budget]:
+                                try:discovery_url=_canonical_source(card.get('url'))
+                                except ValueError:continue
+                                if discovery_url in discovered:
+                                    self._log('跳过搜索重复链接：来源已处理或本轮已发现')
+                                    continue
+                                discovered.add(discovery_url)
                                 stamp = _time(card.get('published_at'))
                                 if stamp is None or timedelta(0) <= now-stamp <= timedelta(hours=24):
                                     candidates.append((topic, kind, card))
@@ -665,6 +674,17 @@ class MicroRuntime:
                             draft['verify'] = list(dict.fromkeys([*(draft.get('verify') or []), *issues]))
                             self._log('模型QA未通过：' + '；'.join(issues)[:500])
                         saved = self.store.save_generated(uuid.uuid4().hex, uuid.uuid4().hex, 1, draft)
+                        # Model work can outlive a slot while tick() expires it.
+                        # Keep the draft, then use only still-free future slots.
+                        current_now = self._now()
+                        current_plan = self.plans.load(current_now.date()) or {}
+                        free = {s['id'] for s in current_plan.get('slots', []) if s['status'] == 'pending'}
+                        occupied = {r['slot_id'] for r in self.queue.items()}
+                        slots = [s for s in slots if s['id'] in free and s['id'] not in occupied
+                                 and _time(s['scheduled_at']) > current_now]
+                        if not slots or not self._eligible(current_now):
+                            self._log('草稿已保存，本轮没有可用的未来排期，不补发')
+                            break
                         slot = slots.pop(0)
                         event_key = hashlib.sha256('\n'.join(sorted(_canonical_source(s['url']) for s in draft['sources'])).encode()).hexdigest()
                         status = 'pending' if check.get('passed') is True else 'awaiting_confirmation'

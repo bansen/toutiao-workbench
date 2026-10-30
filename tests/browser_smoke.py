@@ -7,6 +7,8 @@ import asyncio
 import json
 import sys
 import tempfile
+from datetime import datetime,timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 import httpx
@@ -60,6 +62,17 @@ async def main():
                     results=await collector.search('测试',limit=1)
                     assert len(results)==1, 'Search must wait for the real link, not the empty card shell'
                     await context.unroute('https://so.toutiao.com/**',delayed_search)
+                    now=datetime.now(ZoneInfo('Asia/Hong_Kong'))
+                    old_stamp=(now-timedelta(days=2)).strftime('%Y-%m-%d %H:%M')
+                    new_stamp=(now-timedelta(hours=1)).strftime('%Y-%m-%d %H:%M')
+                    async def advancing_search(route):
+                        cards=''.join(f'<div class="result-content"><a href="https://www.toutiao.com/article/{identity}/">标题</a><div class="cs-source-content">作者\n{stamp}</div></div>'
+                                      for identity,stamp in [(7699775205312315954,new_stamp),(7699775205312315955,old_stamp),(7699775205312315956,new_stamp)])
+                        await route.fulfill(content_type='text/html; charset=utf-8',body=cards)
+                    await context.route('https://so.toutiao.com/**',advancing_search)
+                    fresh=await collector.search('测试','article',1,['https://www.toutiao.com/article/7699775205312315954/'],now-timedelta(hours=24))
+                    assert len(fresh)==1 and fresh[0]['url'].endswith('/7699775205312315956/'), 'Processed and old cards must not exhaust the fresh-candidate budget'
+                    await context.unroute('https://so.toutiao.com/**',advancing_search)
                     async def blocked_article(route):
                         await route.fulfill(content_type='text/html; charset=utf-8',body='<article>仍然保留的正文</article><div role="dialog">请完成安全验证</div>')
                     await context.route('https://www.toutiao.com/article/**',blocked_article)
