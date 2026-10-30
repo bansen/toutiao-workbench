@@ -67,6 +67,32 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.runtime.verify(); self.assertTrue(self.runtime.status()['ready'])
         self.store.set_setting('publishing_account',{'id':'other'})
         self.assertFalse(self.runtime.status()['ready'])
+    async def test_title_history_uses_sent_and_approved_queue_titles_not_failed_drafts(self):
+        row,draft=self.enqueue()
+        self.store.save_generated('bad','bad',1,{'title':'目录模板失败稿','body':'内容','verify':['待核实'],'options':{'profile':'ai-tools-v1'}})
+        self.runtime._records=lambda:[
+            {'id':'sent','title':'真实发布标题','status':'published','created_at':(self.now-timedelta(minutes=30)).isoformat()},
+            {'id':'failed','title':'提交前失败标题','status':'failed_before_submit','created_at':self.now.isoformat()}]
+        titles=self.runtime._recent_titles()
+        self.assertIn(draft['title'],titles)
+        self.assertIn('真实发布标题',titles)
+        self.assertNotIn('目录模板失败稿',titles)
+        self.assertNotIn('提交前失败标题',titles)
+        self.assertNotIn(draft['title'],self.runtime._recent_titles(exclude_draft_id=draft['id']))
+        self.runtime.queue.update(row['id'],{'status':'cancelled'})
+        self.assertNotIn(draft['title'],self.runtime._recent_titles())
+    async def test_prepublication_title_check_refreshes_history_and_excludes_its_own_title(self):
+        from unittest.mock import AsyncMock
+        row,draft=self.enqueue();await self.runtime.verify()
+        self.runtime._records=lambda:[{'id':'other','title':'后来真正发出的标题','status':'published',
+            'created_at':(self.now-timedelta(hours=1)).isoformat()}]
+        check=AsyncMock(return_value={'passed':True,'issues':[]})
+        self.runtime.content.check=check
+        await self.runtime.tick()
+        checked=check.call_args.args[0]
+        self.assertEqual(checked['recent_titles'],['后来真正发出的标题'])
+        self.assertNotIn(row['title'],checked['recent_titles'])
+        self.assertEqual(self.publisher.calls,1)
     async def test_disabled_never_probes_or_submits(self):
         row,_=self.enqueue(); await self.runtime.verify()
         self.store.set_setting('publishing',{'enabled':False})

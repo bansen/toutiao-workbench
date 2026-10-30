@@ -207,6 +207,22 @@ class MicroRuntime:
         ledger = getattr(self.guard, 'ledger', None)
         return ledger.records(self._account()) if ledger and self._account() else []
 
+    def _recent_titles(self, exclude_draft_id=None):
+        records = [r for r in self._records() if r.get('status') in {'submitted','published','uncertain'}]
+        records += [r for r in self.queue.items() if r.get('status') in {'pending','publishing','submitted','published','uncertain'}]
+        records = recent_history(records, self._now())
+        records.sort(key=lambda r: _time(r.get('created_at')) or datetime.min.replace(tzinfo=TIMEZONE), reverse=True)
+        titles = []
+        for row in records:
+            if exclude_draft_id and row.get('draft_id') == exclude_draft_id:
+                continue
+            title = ' '.join((row.get('title') or '').split())
+            if title and title not in titles:
+                titles.append(title)
+            if len(titles) == 20:
+                break
+        return titles
+
     def _within_limits(self, now, target):
         records = [r for r in self._records() if r.get('status') in POSSIBLE]
         today = [r for r in records if (stamp := _time(r.get('created_at'))) and stamp.date() == now.date()]
@@ -347,7 +363,7 @@ class MicroRuntime:
                 self.plans.update_slot(slot['id'], {'status': 'skipped', 'reason': '草稿已编辑'})
                 return
             sources = await self._refresh(draft, priority=True)
-            check = await self.content.check({**row, 'source_snapshots': draft.get('source_snapshots', []), 'editorial_review':draft.get('editorial_review', []), 'recent_titles':draft.get('recent_titles', [])}, sources, row['topic'])
+            check = await self.content.check({**row, 'source_snapshots': draft.get('source_snapshots', []), 'editorial_review':draft.get('editorial_review', []), 'recent_titles':self._recent_titles(exclude_draft_id=draft['id'])}, sources, row['topic'])
             if check.get('passed') is not True:
                 issues = [v for v in check.get('issues', []) if isinstance(v, str) and v.strip()]
                 reason = '发布前来源检查未通过：' + ('；'.join(issues) or '检查结果不可用')
@@ -466,7 +482,7 @@ class MicroRuntime:
             slot = min(slots, key=lambda value: value['scheduled_at'])
             account = self._account()
             refreshed = await self._refresh(draft)
-            result = await self.content.check(draft, refreshed, topic)
+            result = await self.content.check({**draft, 'recent_titles':self._recent_titles(exclude_draft_id=draft_id)}, refreshed, topic)
             if result.get('passed') is not True:
                 issues = [v for v in result.get('issues', []) if isinstance(v, str)]
                 raise ValueError('来源或事实检查未通过：' + '；'.join(issues)[:1000])
@@ -511,7 +527,7 @@ class MicroRuntime:
             if any(draft.get(k) != row.get(k) for k in ('title', 'body', 'sources', 'verify')) or draft.get('verify'):
                 raise ValueError('草稿已编辑或仍有待核实事项，旧快照不可确认')
             refreshed = await self._refresh(draft)
-            result = await self.content.check({**row, 'source_snapshots': draft.get('source_snapshots', []), 'editorial_review':draft.get('editorial_review', [])}, refreshed, row['topic'])
+            result = await self.content.check({**row, 'source_snapshots': draft.get('source_snapshots', []), 'editorial_review':draft.get('editorial_review', []), 'recent_titles':self._recent_titles(exclude_draft_id=draft['id'])}, refreshed, row['topic'])
             verdict = await self.guard.inspect(row, self._account())
             if result.get('passed') is not True or verdict.get('decision') != 'clear':
                 raise ValueError('来源、事实或事件查重检查未通过')
@@ -648,7 +664,7 @@ class MicroRuntime:
                         item['metrics_source'] = card.get('search_url', url)
                         material, _ = self.store.upsert_material(item)
                         if self.ai_tools:
-                            titles = [d.get('title', '') for d in self.store.drafts() if (d.get('options') or {}).get('profile') == PROFILE][:20]
+                            titles = self._recent_titles()
                             draft = await self.content.generate([material], topic, recent_titles=titles)
                         else:
                             draft = await self.content.generate([material], topic)

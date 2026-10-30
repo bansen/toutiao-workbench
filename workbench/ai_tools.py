@@ -89,6 +89,15 @@ def canonical_official_url(url):
     return urlunsplit(('https', p.hostname, p.path or '/', p.query, ''))
 
 
+TITLE_RULES = '''标题必须在正文信息明确后提炼，选出本篇真正值得读的一个切口，不是给内容套栏目名。
+不要默认“产品名＋冒号＋功能罗列”“产品名＋怎么用”“文档站/帮助中心＋几个入口”等目录式标题，也不要把逗号、冒号或数字清单当作每篇必需结构。
+可以从具体工作场景、一个实际难点、功能差别、使用边界或事件的关键变化切入，但这些只是可选角度，不按固定模板轮换。
+产品名放在自然的位置，按内容决定用陈述还是提问、带不带数字，不要求每篇从产品名开头。
+对照recent_titles判断句式和叙述角度，不能仅替换产品名、数字和同义词就复用上一条标题；也不为追求变化强行写成问句、制造悬念或夸张效果。
+标题必须准确覆盖正文主题，不能以一个边角事实吸引点击却写成无关清单。不能虚构亲测、用户痛点、结果或功能。
+若来源只有导航目录，不能用“实用技巧/隐藏功能”等标题包装成未经证实的用法；保留实际证据限制。'''
+
+
 EDITORIAL_RULES = '''你是今日头条AI工具内容编辑，面向普通职场人、内容创作者、程序员和效率工具用户。
 聚焦AI Agent、Skills、工作流、AI办公、AI编程和多模态创作工具。国内产品、国内可用工具和真实办公场景优先。
 每篇只写一个明确产品、Agent、一组Skills或一条工作流；不要写跨产品通用大合集，不为细分而强行缩小主题。
@@ -201,7 +210,7 @@ class AiToolContent(MicroContent):
         return draft
 
     async def generate(self, sources, topic='AI', recent_titles=None):
-        rules = (NEWS_RULES if is_news(sources) else EDITORIAL_RULES) + '\n' + LAYOUT_RULES
+        rules = (NEWS_RULES if is_news(sources) else EDITORIAL_RULES) + '\n' + LAYOUT_RULES + '\n' + TITLE_RULES
         result = await self.request(rules, {'sources': sources, 'recent_titles': recent_titles or []})
         draft = self._draft(result, sources)
         draft['recent_titles'] = recent_titles or []
@@ -209,7 +218,7 @@ class AiToolContent(MicroContent):
         return draft
 
     async def repair(self, draft, sources, topic, issues):
-        rules = (NEWS_RULES if is_news(sources) else EDITORIAL_RULES) + '\n' + LAYOUT_RULES
+        rules = (NEWS_RULES if is_news(sources) else EDITORIAL_RULES) + '\n' + LAYOUT_RULES + '\n' + TITLE_RULES
         result = await self.request(rules + '\n对同一主题作一次有证据的删改，解决issues，禁止仅清空verify；关键事实不成立就保留待核实项。',
                                     {'draft': draft, 'sources': sources, 'issues': issues, 'recent_titles': draft.get('recent_titles', [])})
         revised = self._draft(result, sources, draft)
@@ -239,7 +248,7 @@ class AiToolContent(MicroContent):
             return {'passed': False, 'issues': list(dict.fromkeys(issues))}
         def facts(s):
             return {k: s.get(k) for k in ('url', 'title', 'body', 'author', 'published_at')}
-        rules = (NEWS_RULES if news else EDITORIAL_RULES) + '\n' + LAYOUT_RULES
+        rules = (NEWS_RULES if news else EDITORIAL_RULES) + '\n' + LAYOUT_RULES + '\n' + TITLE_RULES
         result = await self.request(
             rules + ('\n现在仅检查，不创作。检查事件属于科技、近期事实有来源支持、保留宣称和实测的区别，旧闻没有包装成新事件。' if news else '\n现在仅检查，不创作。逐项执行上述十项自检；将产品名称换成另一个AI产品仍成立则过于通用。') +
             ('检查新闻中的事件、日期、型号、数字及效果断言有当前提供的来源正文支持，媒体转述保留归属，不把宣称写成独立实测。' if news else '检查所有功能、入口、价格、套餐、版本、格式及地区断言有当前官方正文支撑，真实实测不得虚构。') +
