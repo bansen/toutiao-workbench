@@ -22,6 +22,7 @@ from .publication_ledger import PublicationLedger
 from .publication_guard import PublicationGuard,digest
 from .toutiao_publisher import ToutiaoPublisher
 from .micro_runtime import MicroRuntime,DEFAULT_KEYWORDS
+from .ai_tools import activate_profile
 
 ROOT=Path(__file__).resolve().parent.parent
 
@@ -32,6 +33,7 @@ def create_app(data_dir=None,browser=None,llm=None,publisher=None):
     data_dir.mkdir(parents=True,exist_ok=True)
     data_dir.chmod(0o700)
     store=Store(data_dir/'workbench.db')
+    activate_profile(store)
     if store.setting('publishing',None) is None:
         store.set_setting('publishing',{'enabled':True})
     caps=json.loads((ROOT/'docs/capabilities.json').read_text())

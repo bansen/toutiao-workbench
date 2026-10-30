@@ -75,13 +75,15 @@
           </div>
           <p id="publishing-state" class="publishing-state" role="status" aria-live="polite">正在读取发布设置…</p>
           <p id="publishing-reason" class="field-note">等待本地服务返回实际状态。</p>
-          <p class="field-note">计划规则：北京时间 08:00–22:00，每日 24–30 条，民生／AI／科技。发布前去重，不声明首发。</p>
+          <p class="field-note">内容定位：AI 工具、Agent、Skills 与工作流。按产品轮换读取官方资料，每篇一个明确主题，标题＋编号内容＋3～5个标签；参考来源单独保留，不混入发布正文。</p>
+          <details><summary>当前选题范围</summary><p class="field-note">WorkBuddy、TRAE、Kimi、腾讯元宝、豆包、千问、扣子、Dify、飞书多维表格、ima、Cherry Studio、Seedance、MiniMax、Codex、Claude、Gemini。优先国内工具和真实办公场景；只使用实际读取到的官方证据，无法核实时跳过。</p></details>
+          <p class="field-note">计划规则：北京时间 08:00–22:00，每日 24–30 条。资料不足或检查未通过时少发，不凑数；发布前去重，不声明首发。</p>
           <label class="check-line"><input type="checkbox" id="publishing-ai" disabled>勾选“引用 AI”声明</label>
           <p class="field-note">当前按你的要求关闭；如果平台强制要求声明或出现人工提示，会暂停提交。</p>
           <div class="dialog-actions"><button class="button" id="publishing-bind">绑定当前登录账号</button><button class="button ink" id="publishing-resume">验证并运行</button><button class="button" id="publishing-pause">立即暂停</button><span id="publishing-account" class="muted"></span></div>
           <div class="publishing-stats" id="publishing-stats"></div>
           <p id="publishing-next" class="field-note"></p>
-          <details><summary>选题关键词</summary><div class="publishing-keywords">
+          <details id="legacy-publishing-keywords"><summary>旧版热点关键词</summary><div class="publishing-keywords">
             <label>民生<input id="publishing-keywords-life" aria-label="民生关键词" placeholder="民生，公共服务"></label>
             <label>AI<input id="publishing-keywords-ai" aria-label="AI关键词" placeholder="人工智能，大模型"></label>
             <label>科技<input id="publishing-keywords-tech" aria-label="科技关键词" placeholder="科技，机器人"></label>

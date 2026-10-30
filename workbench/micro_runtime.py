@@ -12,6 +12,7 @@ from .micro_plan_store import MicroPlanStore
 from .micro_queue import MicroQueue
 from .micro_schedule import TIMEZONE
 from .publication_ledger import body_hash, _canonical_source
+from .ai_tools import PROFILE, AiToolContent, OfficialResearch
 
 POSSIBLE = {'reserved', 'submitting', 'submitted', 'published', 'uncertain', 'rejected'}
 DEFAULT_KEYWORDS = {'民生': ['民生'], 'AI': ['人工智能'], '科技': ['科技']}
@@ -31,6 +32,9 @@ class MicroRuntime:
         self.guard, self.publisher = guard, publisher
         self.clock = clock or (lambda: datetime.now(TIMEZONE))
         self.plans, self.queue, self.content = MicroPlanStore(store), MicroQueue(store), MicroContent(llm)
+        self.ai_tools = store.setting('editorial_profile', '') == PROFILE
+        if self.ai_tools:
+            self.content = AiToolContent(llm)
         self._loop_task = self._prepare_task = None
         self._tick_lock, self._prepare_lock = asyncio.Lock(), asyncio.Lock()
         self._closed, self._running, self._last_tick, self._last_prepare = False, False, None, None
@@ -259,7 +263,8 @@ class MicroRuntime:
                 'paused': bool(pause.get('paused')), 'today': plan,
                 'service_active': bool(self._loop_task and not self._loop_task.done()),
                 'counts': dict(Counter(r['status'] for r in rows if (_time(r['scheduled_at']) or now).date() == now.date())),
-                'next_at': min(future, default=None), 'preparing': self._prepare_lock.locked()}
+                'next_at': min(future, default=None), 'preparing': self._prepare_lock.locked(),
+                'editorial_profile': PROFILE if self.ai_tools else 'hot-news'}
 
     def _skip(self, slot_id, row, reason):
         if row and row.get('reason') and row['reason'] not in reason:
@@ -279,11 +284,14 @@ class MicroRuntime:
     async def _refresh(self, draft, priority=False):
         refreshed = []
         for source in draft.get('sources') or []:
+            official = source.get('kind') == 'official'
+            method = self.browser.official_detail if official else self.browser.detail
+            detail_arg = source.get('author', 'AI工具').removesuffix(' 官方文档') if official else source.get('kind', 'micro' if '/w/' in source['url'] else 'article')
             if priority:
                 async with self.browser.lock:
-                    row = await self.browser.detail(source['url'], source.get('kind', 'micro' if '/w/' in source['url'] else 'article'))
+                    row = await method(source['url'], detail_arg)
             else:
-                row = await self._browser_step(self.browser.detail, source['url'], source.get('kind', 'micro' if '/w/' in source['url'] else 'article'))
+                row = await self._browser_step(method, source['url'], detail_arg)
             if not isinstance(row, dict) or not row.get('body', row.get('content', '')).strip():
                 raise ValueError('来源正文不可见')
             refreshed.append(row)
@@ -329,12 +337,16 @@ class MicroRuntime:
         stage = '来源检查'
         try:
             draft = self.store.draft(row['draft_id'])
+            if self.ai_tools and (draft.get('options') or {}).get('profile') != PROFILE:
+                self.queue.update(row['id'], {'status': 'cancelled', 'reason': '旧内容定位稿件不再发布'})
+                self.plans.update_slot(slot['id'], {'status': 'skipped', 'reason': '旧内容定位稿件不再发布'})
+                return
             if any(draft.get(k) != row.get(k) for k in ('title', 'body', 'verify', 'sources')):
                 self.queue.update(row['id'], {'status': 'cancelled', 'reason': '草稿已编辑，旧快照作废'})
                 self.plans.update_slot(slot['id'], {'status': 'skipped', 'reason': '草稿已编辑'})
                 return
             sources = await self._refresh(draft, priority=True)
-            check = await self.content.check({**row, 'source_snapshots': draft.get('source_snapshots', []), 'editorial_review':draft.get('editorial_review', [])}, sources, row['topic'])
+            check = await self.content.check({**row, 'source_snapshots': draft.get('source_snapshots', []), 'editorial_review':draft.get('editorial_review', []), 'recent_titles':draft.get('recent_titles', [])}, sources, row['topic'])
             if check.get('passed') is not True:
                 issues = [v for v in check.get('issues', []) if isinstance(v, str) and v.strip()]
                 reason = '发布前来源检查未通过：' + ('；'.join(issues) or '检查结果不可用')
@@ -438,6 +450,8 @@ class MicroRuntime:
         async with self._tick_lock:
             now = self._now()
             draft = self.store.draft(draft_id)
+            if self.ai_tools and (draft.get('options') or {}).get('profile') != PROFILE:
+                raise ValueError('当前仅发布新版AI工具内容，请重新生成草稿')
             if topic not in TOPICS or not self._ready() or self._closed:
                 raise ValueError('选题无效或发布服务尚未就绪')
             if hashlib.sha256(draft.get('body', '').encode()).hexdigest() != sha or draft.get('verify'):
@@ -564,36 +578,41 @@ class MicroRuntime:
             keywords = self.store.setting('publishing_keywords', DEFAULT_KEYWORDS) or DEFAULT_KEYWORDS
             candidates = []
             discovered = {url for url in seen if isinstance(url,str)}
-            self._log('开始本轮自动备稿：民生 / AI / 科技，总候选额度30')
+            self._log('开始本轮AI工具官方资料备稿，页面候选额度30' if self.ai_tools else '开始本轮自动备稿：民生 / AI / 科技，总候选额度30')
             try:
-                for topic in TOPICS:
-                    for kind in ('article', 'micro'):
-                        words = keywords.get(topic) or DEFAULT_KEYWORDS[topic]
-                        # Each topic/kind has a total budget of five, even with multiple keywords.
-                        for index, word in enumerate(words[:5]):
-                            budget = 5//len(words[:5]) + (index < 5 % len(words[:5]))
-                            try:
-                                found = await self._browser_step(self.browser.search, word, kind, budget, sorted(discovered), now-timedelta(hours=24))
-                            except ValueError:
-                                self._log('此组合未取得结果，继续搜索：' + topic + ' / ' + kind)
-                                continue
-                            if not found:
-                                self._log('搜索无新候选：' + topic + ' / ' + kind)
-                            for card in found[:budget]:
-                                try:discovery_url=_canonical_source(card.get('url'))
-                                except ValueError:continue
-                                if discovery_url in discovered:
-                                    self._log('跳过搜索重复链接：来源已处理或本轮已发现')
+                if self.ai_tools:
+                    async def read_official(url, product):
+                        return await self._browser_step(self.browser.official_detail, url, product)
+                    candidates = await OfficialResearch(self.store, read_official).discover(discovered, 30)
+                else:
+                    for topic in TOPICS:
+                        for kind in ('article', 'micro'):
+                            words = keywords.get(topic) or DEFAULT_KEYWORDS[topic]
+                            # Each topic/kind has a total budget of five, even with multiple keywords.
+                            for index, word in enumerate(words[:5]):
+                                budget = 5//len(words[:5]) + (index < 5 % len(words[:5]))
+                                try:
+                                    found = await self._browser_step(self.browser.search, word, kind, budget, sorted(discovered), now-timedelta(hours=24))
+                                except ValueError:
+                                    self._log('此组合未取得结果，继续搜索：' + topic + ' / ' + kind)
                                     continue
-                                discovered.add(discovery_url)
-                                stamp = _time(card.get('published_at'))
-                                if stamp is None or timedelta(0) <= now-stamp <= timedelta(hours=24):
-                                    candidates.append((topic, kind, card))
-                                    if stamp is None:
-                                        self._log('列表时间未知，将在详情页核实')
-                                else:
-                                    self._log('跳过候选：发布时间缺失、过期或在未来')
-                self._log('发现候选：' + str(len(candidates)) + ' 条，列表时间未知的将核实详情')
+                                if not found:
+                                    self._log('搜索无新候选：' + topic + ' / ' + kind)
+                                for card in found[:budget]:
+                                    try:discovery_url=_canonical_source(card.get('url'))
+                                    except ValueError:continue
+                                    if discovery_url in discovered:
+                                        self._log('跳过搜索重复链接：来源已处理或本轮已发现')
+                                        continue
+                                    discovered.add(discovery_url)
+                                    stamp = _time(card.get('published_at'))
+                                    if stamp is None or timedelta(0) <= now-stamp <= timedelta(hours=24):
+                                        candidates.append((topic, kind, card))
+                                        if stamp is None:
+                                            self._log('列表时间未知，将在详情页核实')
+                                    else:
+                                        self._log('跳过候选：发布时间缺失、过期或在未来')
+                self._log(('发现官方资料候选：' + str(len(candidates)) + ' 条，按实际读取时间核实当前功能') if self.ai_tools else ('发现候选：' + str(len(candidates)) + ' 条，列表时间未知的将核实详情'))
                 candidates.sort(key=lambda v: (v[2].get('comments') or 0, v[2].get('likes') or 0, _time(v[2].get('published_at')) or datetime.min.replace(tzinfo=TIMEZONE)), reverse=True)
                 for topic, kind, card in candidates[:30]:
                     if not slots or not self._eligible(self._now()):
@@ -605,12 +624,12 @@ class MicroRuntime:
                             continue
                         seen.add(url)
                         self.store.set_setting('micro_seen_sources', sorted(seen))
-                        item = await self._browser_step(self.browser.detail, url, kind)
+                        item = card if kind == 'official' else await self._browser_step(self.browser.detail, url, kind)
                         for key in ('published_at', 'author', 'comments', 'likes'):
                             if item.get(key) in (None, ''):
                                 item[key] = card.get(key)
                         stamp = _time(item.get('published_at'))
-                        if not stamp or not timedelta(0) <= now-stamp <= timedelta(hours=24):
+                        if kind != 'official' and (not stamp or not timedelta(0) <= now-stamp <= timedelta(hours=24)):
                             self._log('跳过候选：来源时间缺失、过期或在未来')
                             continue
                         if not item.get('body', item.get('content', '')).strip():
@@ -618,7 +637,11 @@ class MicroRuntime:
                             continue
                         item['metrics_source'] = card.get('search_url', url)
                         material, _ = self.store.upsert_material(item)
-                        draft = await self.content.generate([material], topic)
+                        if self.ai_tools:
+                            titles = [d.get('title', '') for d in self.store.drafts() if (d.get('options') or {}).get('profile') == PROFILE][:20]
+                            draft = await self.content.generate([material], topic, recent_titles=titles)
+                        else:
+                            draft = await self.content.generate([material], topic)
                         draft['source_snapshots'] = [material]
                         verdict = await self.guard.inspect(draft, self._account())
                         if verdict.get('decision') != 'clear':

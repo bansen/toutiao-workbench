@@ -201,6 +201,7 @@ function renderPublishing(config) {
   const stats=[['今日目标',config.today?.target||0],['已提交',config.submitted_total??((counts.submitted||0)+(counts.published||0)+(counts.rejected||0))],['已发布',config.published_total??(counts.published||0)],['已跳过',slots.filter(s=>s.status==='skipped').length],['待核实',counts.uncertain||0]];
   $('publishing-stats').innerHTML=stats.map(([label,value])=>`<span>${esc(label)}<b>${esc(value)}</b></span>`).join('');
   $('publishing-next').textContent='下一排期：'+(config.next_at?dateText(config.next_at):'今天没有未来排期')+' · 程序'+(config.service_active?'正在运行':'未启动');
+  $('legacy-publishing-keywords').hidden=config.editorial_profile==='ai-tools-v1';
   $('publishing-plan').innerHTML=slots.map(slot=>`<span class="publishing-slot" data-status="${esc(slot.status)}" title="${esc(slot.reason||publishingNames[slot.status]||slot.status)}">${esc(new Date(slot.scheduled_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Shanghai'}))} · ${esc(publishingNames[slot.status]||slot.status)}</span>`).join('');
   for(const [id,topic] of [['life','民生'],['ai','AI'],['tech','科技']]) {
     const input=$('publishing-keywords-'+id);

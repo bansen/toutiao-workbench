@@ -109,6 +109,24 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_due_without_qualified_data_skips(self):
         self.plan(); await self.runtime.verify(); await self.runtime.tick()
         self.assertEqual(self.runtime.plans.load(self.now.date())['slots'][0]['status'],'skipped')
+    async def test_ai_tools_preparation_uses_official_docs_not_hot_news_or_publication_age(self):
+        from unittest.mock import AsyncMock, patch
+        from workbench.ai_tools import PROFILE
+        slot=self.plan(); self.now-=timedelta(minutes=5); await self.runtime.verify()
+        self.runtime.ai_tools=True
+        source={'url':'https://developers.openai.com/codex/skills/', 'content_id':'official:test',
+                'kind':'official','title':'Skills','author':'Codex 官方文档','body':'当前官方功能正文'*30,
+                'published_at':None,'verified_at':self.now.isoformat()}
+        self.browser.official_detail=AsyncMock(return_value=source)
+        self.runtime.content.generate=AsyncMock(return_value={'title':'Codex技能','body':'技能正文',
+            'verify':[],'sources':[source],'options':{'profile':PROFILE,'topic':'AI'}})
+        with patch('workbench.micro_runtime.OfficialResearch.discover',new=AsyncMock(return_value=[('AI','official',source)])):
+            await self.runtime.prepare()
+        self.assertEqual(self.browser.calls,[])
+        self.assertEqual(len(self.runtime.queue.items()),1)
+        self.assertEqual(self.runtime.queue.items()[0]['topic'],'AI')
+        self.runtime.content.generate.assert_awaited_once()
+        self.assertIn('recent_titles',self.runtime.content.generate.call_args.kwargs)
     async def test_restart_publishing_becomes_uncertain_and_pauses(self):
         row,_=self.enqueue(); self.runtime.queue.update(row['id'],{'status':'publishing'})
         self.runtime.plans.update_slot(row['slot_id'],{'status':'publishing'})

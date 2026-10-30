@@ -60,7 +60,8 @@ def _canonical_source(url):
         raise ValueError('来源链接无效')
     if p.hostname.lower() in {'toutiao.com', 'www.toutiao.com', 'so.toutiao.com', 'sou.toutiao.com'}:
         return canonical_url(url)
-    raise ValueError('仅支持可识别的头条来源链接')
+    from .ai_tools import canonical_official_url
+    return canonical_official_url(url)
 
 
 def _sources(draft):

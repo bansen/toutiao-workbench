@@ -2,6 +2,7 @@
 import asyncio
 import re
 import shutil
+import hashlib
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import urlencode, urljoin, urlsplit
@@ -84,6 +85,56 @@ class Browser:
         if self.driver:
             await self.driver.stop()
             self.driver = None
+
+    async def official_detail(self, url, product='AI工具'):
+        """Read allowlisted public documentation; never click or execute page instructions."""
+        from .ai_tools import canonical_official_url
+        url = canonical_official_url(url)
+        await self.start()
+        page = await self.context.new_page()
+        async def navigation_guard(route):
+            request = route.request
+            if request.is_navigation_request() and request.frame == page.main_frame:
+                try: canonical_official_url(request.url)
+                except ValueError:
+                    await route.abort()
+                    return
+            await route.fallback()
+        await page.route('**/*', navigation_guard)
+        try:
+            response = await page.goto(url, wait_until='domcontentloaded', timeout=25000)
+            if response is not None and response.status >= 400:
+                raise ValueError('官方文档返回访问错误')
+            actual = canonical_official_url(page.url)
+            await page.wait_for_timeout(1200)
+            snapshot = await page.evaluate('''() => {
+                const node=document.querySelector('article, main, [role="main"], .VPDoc, .markdown-body') || document.body;
+                const copy=node.cloneNode(true);
+                copy.querySelectorAll('nav,header,footer,script,style,aside,button').forEach(e=>e.remove());
+                return {title:document.title,body:copy.innerText || copy.textContent || '',
+                    links:[...node.querySelectorAll('a[href]')].map(a=>({url:a.href,text:a.innerText}))};
+            }''')
+            body = '\n'.join(line.strip() for line in snapshot['body'].splitlines() if line.strip())
+            if len(body) < 120 or any(value in body[:400].lower() for value in ('verify you are human','access denied','请完成验证','安全验证')):
+                raise ValueError('官方正文不足或需要人工访问')
+            links, seen = [], {actual}
+            host = urlsplit(actual).hostname
+            for link in snapshot['links']:
+                try: candidate = canonical_official_url(link['url'])
+                except ValueError: continue
+                if urlsplit(candidate).hostname != host or candidate in seen:
+                    continue
+                seen.add(candidate)
+                if re.search(r'login|sign.?in|privacy|terms|contact|download|/pricing',candidate,re.I):
+                    continue
+                links.append({'url':candidate,'text':link.get('text','')[:100]})
+            stamp = now_iso()
+            return {'url':actual,'content_id':'official:'+hashlib.sha256(actual.encode()).hexdigest(),
+                    'title':snapshot['title'],'body':body[:18000],'author':product+' 官方文档',
+                    'product':product,'kind':'official','published_at':None,'verified_at':stamp,
+                    'body_collected_at':stamp,'collected_at':stamp,'body_source':actual,'links':links[:60]}
+        finally:
+            await page.close()
 
     async def login(self):
         async with self.lock:

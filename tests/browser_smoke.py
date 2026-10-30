@@ -73,6 +73,14 @@ async def main():
                     fresh=await collector.search('测试','article',1,['https://www.toutiao.com/article/7699775205312315954/'],now-timedelta(hours=24))
                     assert len(fresh)==1 and fresh[0]['url'].endswith('/7699775205312315956/'), 'Processed and old cards must not exhaust the fresh-candidate budget'
                     await context.unroute('https://so.toutiao.com/**',advancing_search)
+                    async def official_fixture(route):
+                        await route.fulfill(content_type='text/html; charset=utf-8',body='<title>WorkBuddy技能</title><main><nav>导航诱饵</nav><article><h1>技能</h1><p>'+('技能页签提供上传技能、创建技能及关闭技能的具体操作。'*15)+'</p><a href="/docs/next">下一个功能</a><a href="https://evil.test/">外站</a></article></main>')
+                    await context.route('https://www.workbuddy.cn/**',official_fixture)
+                    official=await collector.official_detail('https://www.workbuddy.cn/docs/skills','WorkBuddy')
+                    assert official['kind']=='official' and official['published_at'] is None and official['verified_at']
+                    assert '具体操作' in official['body'] and '导航诱饵' not in official['body']
+                    assert all(link['url'].startswith('https://www.workbuddy.cn/') for link in official['links'])
+                    await context.unroute('https://www.workbuddy.cn/**',official_fixture)
                     async def blocked_article(route):
                         await route.fulfill(content_type='text/html; charset=utf-8',body='<article>仍然保留的正文</article><div role="dialog">请完成安全验证</div>')
                     await context.route('https://www.toutiao.com/article/**',blocked_article)
