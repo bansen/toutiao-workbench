@@ -502,3 +502,59 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.runtime.start();await self.runtime.close()
         slot=next(s for s in self.runtime.plans.load(self.now.date())['slots'] if s['id']==row['slot_id'])
         self.assertEqual(slot['status'],'failed')
+
+    async def test_skipping_unqualified_slot_preserves_quality_reason(self):
+        row,_=self.enqueue()
+        self.runtime.queue.update(row['id'],{'reason':'稿件不属于民生，且会议日期缺少支持'})
+        self.runtime._skip(row['slot_id'],self.runtime.queue.get(row['id']),'当前排期没有通过检查的稿件')
+        self.assertIn('会议日期缺少支持',self.runtime.queue.get(row['id'])['reason'])
+        self.assertIn('会议日期缺少支持',str(self.store.setting('publishing_logs')))
+
+    async def test_staging_reports_quality_reason_before_duplicate_model_call(self):
+        from unittest.mock import AsyncMock
+        row,draft=self.enqueue();self.now-=timedelta(minutes=5);await self.runtime.verify()
+        self.runtime.content.check=AsyncMock(return_value={'passed':False,'issues':['会议日期缺少来源支持']})
+        self.runtime.guard.inspect=AsyncMock(return_value={'decision':'clear'})
+        with self.assertRaisesRegex(ValueError,'会议日期缺少来源支持'):
+            await self.runtime.stage(draft['id'],'AI',row['body_sha256'])
+        self.runtime.guard.inspect.assert_not_awaited()
+
+    async def test_prepare_repairs_once_rechecks_and_uses_actual_topic(self):
+        from unittest.mock import AsyncMock
+        self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify()
+        async def search(*args):return [{'url':'https://www.toutiao.com/article/123456789012/','published_at':self.now.isoformat()}]
+        self.browser.search=search
+        async def generate(sources,topic):return {'title':'AI会议','body':'未经支持的成效','verify':[], 'sources':[{'url':sources[0]['url']}], 'options':{'topic':topic}}
+        async def repair(draft,sources,topic,issues):return {**draft,'body':'来源报道会议讨论AI应用','options':{'topic':'AI'},'editorial_review':issues}
+        self.runtime.content.generate=generate
+        self.runtime.content.repair=AsyncMock(side_effect=repair)
+        self.runtime.content.check=AsyncMock(side_effect=[{'passed':False,'issues':['删除未支持成效']},{'passed':True,'issues':[]}])
+        await self.runtime.prepare()
+        self.runtime.content.repair.assert_awaited_once()
+        self.assertEqual(self.runtime.content.check.await_count,2)
+        row=self.runtime.queue.items()[0]
+        self.assertEqual(row['topic'],'AI')
+        self.assertEqual(row['status'],'pending')
+        self.assertNotIn('未经支持',row['body'])
+        self.assertEqual(self.store.draft(row['draft_id'])['editorial_review'],['删除未支持成效'])
+
+    async def test_unknown_list_time_is_verified_on_detail_page(self):
+        self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify()
+        async def search(*args):return [{'url':'https://www.toutiao.com/article/123456789012/','published_at':None}]
+        self.browser.search=search
+        async def generate(sources,topic):return {'title':'机器人展会','body':'机器人亮相展会','sources':[{'url':sources[0]['url']}],'verify':[]}
+        self.runtime.content.generate=generate
+        await self.runtime.prepare()
+        self.assertEqual(len(self.runtime.queue.items()),1)
+        self.assertEqual(self.runtime.queue.items()[0]['status'],'pending')
+
+    async def test_missing_detail_time_still_blocks_generation(self):
+        from unittest.mock import AsyncMock
+        self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify()
+        async def search(*args):return [{'url':'https://www.toutiao.com/article/123456789012/','published_at':None}]
+        self.browser.search=search
+        self.browser.detail=AsyncMock(return_value={'url':'https://www.toutiao.com/article/123456789012/','body':'正文','published_at':None})
+        self.runtime.content.generate=AsyncMock()
+        await self.runtime.prepare()
+        self.runtime.content.generate.assert_not_awaited()
+        self.assertEqual(self.runtime.queue.items(),[])

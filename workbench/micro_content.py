@@ -54,16 +54,41 @@ class MicroContent:
                 'editorial_review':editorial_review,
                 'options':{'mode':'single' if len(sources)==1 else 'multi','format':'micro','topic':topic,'length':'300','style':'口语化','versions':1}}
 
+    async def repair(self,draft,sources,topic,issues):
+        """One bounded correction; callers must independently check it again."""
+        result=await self.request(
+            '按质量检查问题，对同一事件作一次删改。删除问题涉及的断言、引语、数字或效果描述，不能只删核实清单，不能用“据称”包装保留存疑断言。'
+            '只保留来源正文直接支持的事件事实；删改后没有具体事件就保留verify，不凑稿。不新增经历、事实、日期或另一事件。'
+            '根据剩余事件实际主题选择民生、AI或科技，搜索方向不等于真实主题。返回'
+            '{"title":"内部标题","body":"纯文字正文，不带来源行","verify":["仍存疑的正文事实"],"topic":"民生或AI或科技"}。',
+            {'draft':draft,'sources':sources,'search_topic':topic,'issues':issues})
+        if (not isinstance(result,dict) or result.get('topic') not in TOPICS
+            or not isinstance(result.get('title'),str) or not result['title'].strip()
+            or not isinstance(result.get('body'),str) or not 1<=len(result['body'].strip())<=1000
+            or not isinstance(result.get('verify'),list) or not all(isinstance(v,str) for v in result['verify'])):
+            raise ValueError('质量删改返回格式不正确')
+        repaired=json.loads(json.dumps(draft,ensure_ascii=False))
+        authors=list(dict.fromkeys(s.get('author') or s.get('title','来源原文') for s in sources))
+        body=result['body'].split('\n来源：',1)[0].strip()+'\n\n来源：'+'；'.join(authors)
+        repaired.update(title=result['title'].strip(),body=body,verify=result['verify'],
+                        editorial_review=list(dict.fromkeys([*(draft.get('editorial_review') or []),*issues])))
+        repaired['options']={**(draft.get('options') or {}),'topic':result['topic']}
+        return repaired
+
     async def check(self,draft,sources,topic):
         if not draft.get('body','').strip() or draft.get('verify') or not sources:
             return {'passed':False,'issues':['正文、来源或待核实事项不满足发布条件']}
+        def facts(source):
+            return {key:source.get(key) for key in ('title','body','author','url','published_at')}
+        candidate={key:draft.get(key) for key in ('title','body','verify','editorial_review','sources')}
+        candidate['source_snapshots']=[facts(source) for source in draft.get('source_snapshots', [])]
         result=await self.request(
             '检查候选微头条是否适合发布：每个事实、日期、数字、引语必须有提供的正文支持；来源链接仅供记录，不能假定链接内容。'
             '确认主题属于指定方向，没有虚构亲历、矛盾或未经支持的断言。比较最初资料和刚重新读取的资料，若出现新进展、冲突或正文不可见，判定不通过，留给人工处理。'
             '观点必须明确为观点，不以观点替代事实。必须存在有来源支持的具体事件，不能用泛泛议论凑稿。没有足够证据就不通过。模型检查不保证真实。'
             'editorial_review记录先前的核实问题，若相关问题断言仍在正文中，必须不通过；只有已删除且剩余事件有支持时才可通过。'
             '返回{"passed":true或false,"issues":["具体问题"]}。只有无任何问题才允许passed=true。',
-            {'topic':topic,'draft':draft,'sources':sources})
+            {'topic':topic,'draft':candidate,'sources':[facts(source) for source in sources]})
         valid=isinstance(result,dict) and result.get('passed') is True and result.get('issues')==[]
         issues=result.get('issues') if isinstance(result,dict) else None
         return {'passed':valid,'issues':issues if isinstance(issues,list) and all(isinstance(v,str) for v in issues) else ['模型检查结果不可用']}

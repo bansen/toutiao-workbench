@@ -262,6 +262,8 @@ class MicroRuntime:
                 'next_at': min(future, default=None), 'preparing': self._prepare_lock.locked()}
 
     def _skip(self, slot_id, row, reason):
+        if row and row.get('reason') and row['reason'] not in reason:
+            reason += '；原检查：' + row['reason']
         if row and row['status'] in {'pending', 'awaiting_confirmation'}:
             self.queue.update(row['id'], {'status': 'skipped', 'reason': reason})
         self.plans.update_slot(slot_id, {'status': 'skipped', 'reason': reason})
@@ -447,9 +449,12 @@ class MicroRuntime:
             account = self._account()
             refreshed = await self._refresh(draft)
             result = await self.content.check(draft, refreshed, topic)
+            if result.get('passed') is not True:
+                issues = [v for v in result.get('issues', []) if isinstance(v, str)]
+                raise ValueError('来源或事实检查未通过：' + '；'.join(issues)[:1000])
             verdict = await self.guard.inspect(draft, account)
-            if result.get('passed') is not True or verdict.get('decision') != 'clear':
-                raise ValueError('来源、事实或事件查重检查未通过')
+            if verdict.get('decision') != 'clear':
+                raise ValueError('发布历史查重未通过：' + '；'.join(verdict.get('reasons') or ['事件是否重复尚不明确'])[:1000])
             history = self.queue.history()
             origins = {_canonical_source(source['url']) for source in draft.get('sources', [])}
             if not origins or any(origins & {_canonical_source(source['url']) for source in row.get('sources', [])} for row in history):
@@ -568,12 +573,14 @@ class MicroRuntime:
                                 continue
                             for card in found[:budget]:
                                 stamp = _time(card.get('published_at'))
-                                if stamp and timedelta(0) <= now-stamp <= timedelta(hours=24):
+                                if stamp is None or timedelta(0) <= now-stamp <= timedelta(hours=24):
                                     candidates.append((topic, kind, card))
+                                    if stamp is None:
+                                        self._log('列表时间未知，将在详情页核实')
                                 else:
                                     self._log('跳过候选：发布时间缺失、过期或在未来')
-                self._log('发现候选：' + str(len(candidates)) + ' 条24小时内资料')
-                candidates.sort(key=lambda v: (v[2].get('comments') or 0, v[2].get('likes') or 0, _time(v[2].get('published_at'))), reverse=True)
+                self._log('发现候选：' + str(len(candidates)) + ' 条，列表时间未知的将核实详情')
+                candidates.sort(key=lambda v: (v[2].get('comments') or 0, v[2].get('likes') or 0, _time(v[2].get('published_at')) or datetime.min.replace(tzinfo=TIMEZONE)), reverse=True)
                 for topic, kind, card in candidates[:30]:
                     if not slots or not self._eligible(self._now()):
                         break
@@ -628,7 +635,33 @@ class MicroRuntime:
                         refreshed = await self._refresh(draft)
                         check = await self.content.check(draft, refreshed, topic)
                         if check.get('passed') is not True:
-                            self._log('模型QA未通过：稿件将等待人工确认')
+                            issues = check.get('issues') or ['稿件质量检查未通过']
+                            try:
+                                revised = await self.content.repair(draft, refreshed, topic, issues)
+                                revised_topic = (revised.get('options') or {}).get('topic')
+                                if revised_topic not in TOPICS:
+                                    raise ValueError('删改后的选题无效')
+                                draft, topic = revised, revised_topic
+                                check = await self.content.check(draft, refreshed, topic)
+                                if check.get('passed') is True:
+                                    verdict = await self.guard.inspect(draft, self._account())
+                                    if verdict.get('decision') != 'clear':
+                                        check = {'passed':False,'issues':verdict.get('reasons') or ['删改稿发布查重未通过']}
+                                    history = recent_history(self.queue.history(), self._now())
+                                    for offset in range(0, len(history), 20):
+                                        if check.get('passed') is not True:
+                                            break
+                                        duplicate = await self.llm.judge_duplicate(draft, history[offset:offset+20])
+                                        if duplicate.get('decision') != 'distinct':
+                                            check = {'passed':False,'issues':['删改稿与队列重复或无法确定']}
+                                self._log('已完成一次质量删改并重新检查：' + topic)
+                            except Exception:
+                                check = {'passed':False,'issues':issues}
+                                self._log('质量删改不可用，保留原问题待处理')
+                        if check.get('passed') is not True:
+                            issues = check.get('issues') or ['稿件质量检查未通过']
+                            draft['verify'] = list(dict.fromkeys([*(draft.get('verify') or []), *issues]))
+                            self._log('模型QA未通过：' + '；'.join(issues)[:500])
                         saved = self.store.save_generated(uuid.uuid4().hex, uuid.uuid4().hex, 1, draft)
                         slot = slots.pop(0)
                         event_key = hashlib.sha256('\n'.join(sorted(_canonical_source(s['url']) for s in draft['sources'])).encode()).hexdigest()

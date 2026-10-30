@@ -63,3 +63,33 @@ class MicroContentTests(unittest.IsolatedAsyncioTestCase):
         service=MicroContent(LLM('https://model.test/v1','key','test',transport=httpx.MockTransport(respond)))
         draft=await service.generate([SOURCE],'科技')
         self.assertIn('关键事实待核实',draft['verify'])
+
+    async def test_quality_repair_preserves_issues_and_source_identity(self):
+        service=self.service({'title':'AI会议','body':'报道说会议讨论AI应用。','verify':[],'topic':'AI'})
+        old={'title':'旧稿','body':'专家称经营成效显著。','verify':[],
+             'sources':[{'url':SOURCE['url']}],'source_snapshots':[SOURCE],
+             'editorial_review':['成效未核实'],'options':{'topic':'民生'}}
+        result=await service.repair(old,[SOURCE],'民生',['应删除成效断言'])
+        self.assertEqual(result['options']['topic'],'AI')
+        self.assertEqual(result['sources'],old['sources'])
+        self.assertEqual(result['editorial_review'],['成效未核实','应删除成效断言'])
+        self.assertNotIn('显著',result['body'])
+        self.assertEqual(old['body'],'专家称经营成效显著。')
+
+    async def test_quality_repair_rejects_missing_topic_or_unresolved_body(self):
+        for result in ({'title':'标题','body':'正文','verify':[]},
+                       {'title':'标题','body':'','verify':[],'topic':'AI'}):
+            with self.assertRaises(ValueError):
+                await self.service(result).repair({'body':'正文','sources':[]},[SOURCE],'AI',['检查失败'])
+
+    async def test_check_compares_source_facts_without_collection_metadata(self):
+        calls=[];service=self.service({'passed':True,'issues':[]},calls)
+        source={**SOURCE,'collected_at':'later','metrics_collected_at':'later','comments':42}
+        draft={'body':'报道提到展会展示机器人。','verify':[],'editorial_review':['价格未披露'],
+               'source_snapshots':[{**SOURCE,'collected_at':'earlier'}],'options':{'topic':'科技'}}
+        await service.check(draft,[source],'科技')
+        payload=json.loads(calls[0]['messages'][1]['content'])
+        self.assertNotIn('collected_at',json.dumps(payload))
+        self.assertEqual(payload['sources'][0]['body'],SOURCE['body'])
+        self.assertEqual(payload['draft']['source_snapshots'][0]['body'],SOURCE['body'])
+        self.assertEqual(payload['draft']['editorial_review'],['价格未披露'])
