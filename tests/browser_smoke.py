@@ -84,6 +84,22 @@ async def main():
                     page.on('pageerror',lambda error:errors.append(str(error)))
                     await page.goto('http://127.0.0.1:8766/')
                     await page.locator('[data-select]').first.wait_for()
+                    toggle=page.get_by_role('switch',name='自动发布',exact=True)
+                    await page.wait_for_function("() => !document.querySelector('#publishing-enabled').disabled")
+                    assert await toggle.is_checked()
+                    await page.locator('#publishing-state').filter(has_text='未就绪，未运行').wait_for()
+                    await toggle.uncheck()
+                    await page.locator('#publishing-state').filter(has_text='自动发布已关闭').wait_for()
+                    await page.reload()
+                    await page.wait_for_function("() => !document.querySelector('#publishing-enabled').disabled")
+                    assert not await toggle.is_checked()
+                    await toggle.check()
+                    await page.locator('#publishing-state').filter(has_text='设置已开启').wait_for()
+                    assert '当前不会自动发帖' in await page.locator('#publishing-reason').inner_text()
+                    control_output=Path(__file__).resolve().parent.parent/'output/playwright'
+                    control_output.mkdir(parents=True,exist_ok=True)
+                    await page.locator('.publishing-panel').screenshot(path=str(control_output/'publishing-control-test.png'))
+
                     await page.locator('#domain-choices').get_by_role('button',name='科技',exact=True).click()
                     await page.locator('#domain-choices').get_by_role('button',name='生活',exact=True).click()
                     await page.locator('#domain-choices').get_by_role('button',name='科技',exact=True).click()
@@ -159,7 +175,7 @@ async def main():
                     output.mkdir(parents=True,exist_ok=True)
                     await page.screenshot(path=str(output/'drafts-test.png'),full_page=True)
                     assert not errors, errors
-                    print('PASS: multi-select toggling/persistence; two styles × versions; single/multi-source; edit; clipboard; MD/TXT download; SQLite reopen; model configuration key clearing/privacy; no JS errors.')
+                    print('PASS: publishing switch default/on/off/reload/not-ready; multi-select toggling/persistence; two styles × versions; single/multi-source; edit; clipboard; MD/TXT download; SQLite reopen; model configuration key clearing/privacy; no JS errors.')
                 finally:
                     await browser.close()
         finally:

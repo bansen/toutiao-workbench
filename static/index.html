@@ -66,6 +66,17 @@
           <p id="schedule-state" class="schedule-state">定时已关闭</p>
           <button id="save-settings" class="button full">保存设置与定时条件</button>
         </section>
+
+        <section class="panel publishing-panel" aria-labelledby="publishing-heading">
+          <div class="section-heading"><span class="step">04</span><h3 id="publishing-heading">自动微头条</h3></div>
+          <div class="publishing-control">
+            <div><strong>自动发布</strong><p class="field-note">默认开启，修改后立即保存。关闭后保留已提交的内容。</p></div>
+            <label class="publishing-switch"><input type="checkbox" role="switch" id="publishing-enabled" aria-label="自动发布" aria-describedby="publishing-state publishing-reason" disabled><span aria-hidden="true"></span></label>
+          </div>
+          <p id="publishing-state" class="publishing-state" role="status" aria-live="polite">正在读取发布设置…</p>
+          <p id="publishing-reason" class="field-note">等待本地服务返回实际状态。</p>
+          <p class="field-note">计划规则：北京时间 08:00–22:00，每日 24–30 条，民生／AI／科技。发布前去重，不声明首发。</p>
+        </section>
       </section>
 
       <section class="content-column">

@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel,ConfigDict,Field,model_validator,field_validator
+from pydantic import BaseModel,ConfigDict,Field,StrictBool,model_validator,field_validator
 
 from .parsing import canonical_url
 
@@ -98,3 +98,8 @@ class DraftEdit(StrictModel):
     title:str=Field(min_length=1,max_length=300)
     body:str=Field(min_length=1,max_length=150000)
     verify:list[str]=Field(default_factory=list,max_length=100)
+
+
+class PublishingSettings(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    enabled:StrictBool

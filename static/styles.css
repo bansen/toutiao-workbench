@@ -35,3 +35,17 @@
 .results-panel{min-height:400px}
 @media(max-width:900px){.settings-column{grid-template-columns:minmax(0,1fr)}.settings-column .two-fields{grid-template-columns:1fr}.content-column{grid-row:auto}.settings-column>.panel{padding:18px}.option-row{gap:10px}.option-row>.field-label{width:96px}.settings-column .form-actions{margin-left:106px}.settings-column #generate{margin-left:106px;min-width:0}.choice-button{min-width:56px;padding:7px 10px}}
 @media(max-width:560px){.option-row{flex-direction:column;gap:6px;margin:14px 0}.option-row>.field-label{width:auto;margin:0;flex-direction:row;gap:10px;align-items:center}.choice-group{width:100%}.settings-column .two-fields:has(#degree){grid-template-columns:1fr}.settings-column .form-actions,.settings-column #generate{margin-left:0;width:100%}.schedule-panel>.option-row{display:flex}.option-row>.segmented{flex:auto;width:100%}.choice-button{font-size:11px}.settings-column>.panel{padding:18px 16px}}
+
+.publishing-control{display:flex;align-items:center;justify-content:space-between;gap:24px}
+.publishing-control strong{font-size:13px;font-weight:500}
+.publishing-switch{position:relative;display:inline-block;flex-shrink:0;width:46px;height:26px;cursor:pointer}
+.publishing-switch input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
+.publishing-switch span{display:block;width:46px;height:26px;border:1px solid #d5d8cf;border-radius:16px;background:#e7e9e1;pointer-events:none}
+.publishing-switch span:after{content:'';position:absolute;left:4px;top:4px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px #202b3326}
+.publishing-switch input:checked+span{background:var(--accent);border-color:var(--accent)}
+.publishing-switch input:checked+span:after{left:24px}
+.publishing-switch input:focus-visible+span{outline:2px solid var(--ink);outline-offset:3px}
+.publishing-switch input:disabled+span{opacity:.5}
+.publishing-switch input:disabled{cursor:wait}
+.publishing-state{margin:8px 0;font-size:12px;font-weight:500;color:#95673c}
+.publishing-state[data-state=disabled]{color:#777f70}

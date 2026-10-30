@@ -16,7 +16,7 @@ from .engine import Engine
 from .llm import LLM
 from .model_config import ModelConfig,load_model_values,save_model_values
 from .parsing import select_items
-from .schemas import Collection,DOMAINS,DraftEdit,GenerateRequest,Generation,ImportRequest,Schedule
+from .schemas import Collection,DOMAINS,DraftEdit,GenerateRequest,Generation,ImportRequest,Schedule,PublishingSettings
 from .store import Store
 from .publication_ledger import PublicationLedger
 from .publication_guard import PublicationGuard,digest
@@ -30,6 +30,8 @@ def create_app(data_dir=None,browser=None,llm=None):
     data_dir.mkdir(parents=True,exist_ok=True)
     data_dir.chmod(0o700)
     store=Store(data_dir/'workbench.db')
+    if store.setting('publishing',None) is None:
+        store.set_setting('publishing',{'enabled':True})
     caps=json.loads((ROOT/'docs/capabilities.json').read_text())
     browser=browser or Browser(data_dir/'browser')
     llm=llm or LLM(*load_model_values(ROOT,data_dir))
@@ -133,6 +135,23 @@ def create_app(data_dir=None,browser=None,llm=None):
     async def home():
         return FileResponse(ROOT/'static/index.html')
 
+    def publishing_status():
+        enabled=store.setting('publishing',{'enabled':True})['enabled']
+        # No runtime publisher is installed yet. This state cannot be supplied
+        # by a client or inferred from enabling the preference.
+        return {'enabled':enabled,'ready':False,'running':False,
+                'state':'not_ready' if enabled else 'disabled',
+                'reason':'发布器与排期尚未接入，当前不会自动发帖。' if enabled else '自动发布已关闭。'}
+
+    @app.get('/api/publishing/settings')
+    async def publishing_settings():
+        return publishing_status()
+
+    @app.put('/api/publishing/settings')
+    async def save_publishing_settings(options:PublishingSettings):
+        store.set_setting('publishing',options.model_dump())
+        return publishing_status()
+
     @app.get('/api/status')
     async def status():
         return {'capabilities':caps,'domains':DOMAINS,'model':llm.status(),'paused':engine.paused,
@@ -140,6 +159,7 @@ def create_app(data_dir=None,browser=None,llm=None):
                 'schedule':store.setting('schedule',{'enabled':False,'minutes':30,'collection':None}),
                 'next_run_in':max(0,int(engine.next_run-time.monotonic())) if engine.next_run else None,
                 'preferences':store.setting('preferences',{}),
+                'publishing':publishing_status(),
                 'counts':{'materials':len(store.materials()),'drafts':len(store.drafts())}}
 
     @app.post('/api/preferences')

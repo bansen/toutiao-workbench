@@ -84,4 +84,35 @@ class APITests(unittest.TestCase):
             self.assertTrue(imported.state.engine.store.setting('publication_import_error',False))
 
 
+
+    def test_auto_publishing_defaults_enabled_but_never_reports_running(self):
+        result=self.client.get('/api/publishing/settings')
+        self.assertEqual(result.status_code,200)
+        config=result.json()
+        self.assertIs(config['enabled'],True)
+        self.assertIs(config['ready'],False)
+        self.assertIs(config['running'],False)
+        self.assertEqual(config['state'],'not_ready')
+        self.assertTrue(config['reason'])
+        self.assertEqual(self.client.get('/api/status').json()['publishing'],config)
+
+    def test_auto_publishing_toggle_persists_false_on_restart(self):
+        response=self.client.put('/api/publishing/settings',json={'enabled':False},headers=self.headers)
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.json()['state'],'disabled')
+        reopened=create_app(Path(self.tmp.name),browser=FakeBrowser(),llm=FakeLLM())
+        with TestClient(reopened,base_url='http://127.0.0.1:8765') as client:
+            self.assertIs(client.get('/api/publishing/settings').json()['enabled'],False)
+        response=self.client.put('/api/publishing/settings',json={'enabled':True},headers=self.headers)
+        self.assertIs(response.json()['enabled'],True)
+        self.assertIs(response.json()['running'],False)
+
+    def test_auto_publishing_settings_reject_foreign_origin_and_forged_readiness(self):
+        path='/api/publishing/settings'
+        for headers in ({},{'Origin':'https://evil.example','X-Workbench-Request':'1'}):
+            self.assertEqual(self.client.put(path,json={'enabled':False},headers=headers).status_code,403)
+        for data in ({'enabled':'false'},{'enabled':True,'ready':True},{'enabled':True,'running':True}):
+            self.assertEqual(self.client.put(path,json=data,headers=self.headers).status_code,422)
+
+
 if __name__=='__main__': unittest.main()

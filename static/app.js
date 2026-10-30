@@ -1,6 +1,7 @@
 /* Saved secrets stay on the server; the page never receives the saved API key. */
 const $ = id => document.getElementById(id);
 const state = {tab:'materials', selected:new Set(), materials:[], drafts:[], tasks:[], status:null, editing:null, dirty:false};
+let publishingSaving=false, publishingRevision=0;
 const statusNames = {waiting:'等待中',running:'运行中',attention:'待人工处理',success:'成功',partial:'部分失败',failed:'失败',stopped:'已停止'};
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 let toastTimer;
@@ -185,8 +186,18 @@ async function loadTasks() {
   if (current) $('collection-progress').textContent=`${statusNames[current.status]} · 已检查 ${current.checked} / 已入选 ${current.accepted} · 未知排除 ${current.unknown}`;
 }
 
+function renderPublishing(config) {
+  $('publishing-enabled').checked=config.enabled;
+  $('publishing-enabled').disabled=false;
+  $('publishing-state').dataset.state=config.state;
+  $('publishing-state').textContent=config.enabled?'设置已开启 · 未就绪，未运行':'自动发布已关闭';
+  $('publishing-reason').textContent=config.reason;
+}
+
 async function refreshStatus(initial=false) {
+  const revision=publishingRevision, wasSaving=publishingSaving;
   const status=await api('/api/status');state.status=status;
+  if (!wasSaving && !publishingSaving && revision===publishingRevision) renderPublishing(status.publishing);
   $('material-count').textContent=status.counts.materials;
   $('draft-count').textContent=status.counts.drafts;
   $('model-dot').classList.toggle('ready',status.model.configured);
@@ -399,4 +410,20 @@ act('draft-dedup',async()=>{
     const labels={clear:'当前历史未发现重复',duplicate:'重复稿件，禁止发送',review:'需要人工核实，未放行发送'};
     report.textContent=(labels[result.decision]||labels.review)+'。'+(result.reasons||[]).join('；');
   } finally {button.disabled=false;}
+});
+
+$('publishing-enabled').addEventListener('change',async()=>{
+  const toggle=$('publishing-enabled');
+  publishingSaving=true;publishingRevision++;toggle.disabled=true;
+  $('publishing-state').textContent='正在保存发布设置…';
+  try {
+    const result=await api('/api/publishing/settings','PUT',{enabled:toggle.checked});
+    renderPublishing(result);
+    toast(result.enabled?'自动发布设置已开启；当前发布器未就绪，尚未运行':'自动发布已关闭');
+  } catch(error) {
+    toggle.disabled=true;
+    $('publishing-state').textContent='无法确认设置是否保存，请等待重新连接';
+    $('publishing-reason').textContent='以服务器保存的状态为准，连接恢复后自动核对。';
+    toast(error.message,true);
+  } finally {publishingSaving=false;}
 });
