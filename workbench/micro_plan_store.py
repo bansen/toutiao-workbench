@@ -43,3 +43,42 @@ class MicroPlanStore:
             db.execute('INSERT INTO micro_daily_plans VALUES(?,?) ON CONFLICT(day) DO UPDATE SET payload=excluded.payload',
                        (day,self.store.dump(plan)))
         return plan
+
+    def load(self, day):
+        """Read a stored plan without drawing slots or changing expiry."""
+        key=day.isoformat() if hasattr(day,'isoformat') else day
+        with self.store.connection() as db:
+            row=db.execute('SELECT payload FROM micro_daily_plans WHERE day=?',(key,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def update_slot(self, slot_id, changes, expected_statuses=None):
+        """Atomically update slot progress while preserving the drawn schedule."""
+        allowed={'status','reason','queue_id','draft_id','topic','event_key','publication_id','receipt'}
+        statuses={'pending','queued','awaiting_confirmation','publishing','submitted','published',
+                  'completed','rejected','uncertain','failed','skipped','cancelled'}
+        if set(changes)-allowed or ('status' in changes and changes['status'] not in statuses):
+            raise ValueError('不能修改排期标识、时间、目标或未知字段')
+        with self.store.connection() as db:
+            db.execute('BEGIN IMMEDIATE')
+            # The full identity is looked up, never trusted as an SQL identifier.
+            for record in db.execute('SELECT day,payload FROM micro_daily_plans').fetchall():
+                plan=json.loads(record['payload'])
+                slot=next((item for item in plan['slots'] if item['id']==slot_id),None)
+                if slot is None:
+                    continue
+                if expected_statuses is not None and slot['status'] not in expected_statuses:
+                    raise ValueError('排期状态已变化')
+                possible_submission={
+                    'publishing':{'submitted','published','rejected','uncertain'},
+                    'submitted':{'published','rejected','uncertain'},
+                    'uncertain':{'submitted','published','rejected'},
+                }
+                next_status=changes.get('status',slot['status'])
+                if slot['status'] in possible_submission and next_status!=slot['status'] and next_status not in possible_submission[slot['status']]:
+                    raise ValueError('可能已提交的排期不能重新启用，必须核实平台回执')
+                if slot['status'] in ('skipped','completed','published','rejected','cancelled','failed') and changes.get('status',slot['status'])!=slot['status']:
+                    raise ValueError('终态排期不能重新启用')
+                slot.update(changes)
+                db.execute('UPDATE micro_daily_plans SET payload=? WHERE day=?',(self.store.dump(plan),record['day']))
+                return plan
+            raise KeyError('排期不存在')

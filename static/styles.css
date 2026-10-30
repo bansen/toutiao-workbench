@@ -49,3 +49,13 @@
 .publishing-switch input:disabled{cursor:wait}
 .publishing-state{margin:8px 0;font-size:12px;font-weight:500;color:#95673c}
 .publishing-state[data-state=disabled]{color:#777f70}
+
+.publishing-stats{display:flex;flex-wrap:wrap;gap:24px;margin:20px 0 6px;padding-top:16px;border-top:1px solid var(--line)}
+.publishing-stats span{font-size:11px;color:#7c8375}.publishing-stats b{display:block;font-size:21px;font-weight:500;color:var(--ink);margin-top:5px}
+.publishing-panel details{margin-top:14px;font-size:12px}.publishing-panel summary{cursor:pointer;color:#6a7460;padding:5px 0}
+.publishing-keywords{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:12px}.publishing-keywords label{font-size:11px}.publishing-keywords input{display:block;margin-top:7px;width:100%}
+.publishing-plan{display:flex;flex-wrap:wrap;gap:6px;padding:14px 0}.publishing-slot{border:1px solid var(--line);padding:5px 8px;border-radius:3px;font-size:10px;color:#777f70}.publishing-slot[data-status=skipped]{opacity:.55}.publishing-slot[data-status=published]{background:#edf2e9;color:#537249}
+.publishing-queue:empty:before{content:'还没有排队稿件；每小时只准备下一小时所需内容。';display:block;color:#92998a;font-size:11px;padding:10px 0}
+.publication-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:12px 0;border-top:1px solid var(--line)}.publication-row strong{font-size:12px;font-weight:500}.publication-row p{font-size:10px;color:#8c9481;margin:6px 0}.publication-row .button{white-space:nowrap}
+.publishing-logs{font:11px/1.8 monospace;white-space:pre-wrap;background:#f7f8f3;padding:14px;max-height:260px;overflow:auto}.publication-body{font-family:inherit;font-size:14px;line-height:1.9;white-space:pre-wrap;background:#fafaf7}.micro-topic{font-size:11px;display:flex;align-items:center;gap:8px}.micro-topic select{width:90px}
+@media(max-width:560px){.publishing-keywords{grid-template-columns:1fr}.publishing-stats{gap:18px}.publication-row{align-items:flex-start}.publication-row strong{word-break:break-word}}

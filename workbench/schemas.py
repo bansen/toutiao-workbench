@@ -103,3 +103,26 @@ class DraftEdit(StrictModel):
 class PublishingSettings(BaseModel):
     model_config=ConfigDict(extra='forbid')
     enabled:StrictBool
+    ai_declaration:StrictBool=False
+
+
+class PublicationConfirmation(StrictModel):
+    body_sha256:str=Field(pattern=r'^[a-f0-9]{64}$')
+
+
+class PublishingKeywords(StrictModel):
+    keywords:dict[str,list[str]]
+
+    @field_validator('keywords')
+    @classmethod
+    def valid_keywords(cls,value):
+        if set(value)!={'民生','AI','科技'}:raise ValueError('必须分别配置民生、AI和科技关键词')
+        for topic,words in value.items():
+            words=list(dict.fromkeys(w.strip() for w in words))
+            if not 1<=len(words)<=5 or any(not w or len(w)>50 for w in words):raise ValueError('每个方向需要1至5个关键词，每个最多50字')
+            value[topic]=words
+        return value
+
+
+class PublicationStage(PublicationConfirmation):
+    topic:Literal['民生','AI','科技']

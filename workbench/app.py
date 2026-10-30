@@ -11,20 +11,22 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse,JSONResponse,Response
 from fastapi.staticfiles import StaticFiles
 
-from .browser import Browser
+from .browser import Browser,NeedsAttention
 from .engine import Engine
 from .llm import LLM
 from .model_config import ModelConfig,load_model_values,save_model_values
 from .parsing import select_items
-from .schemas import Collection,DOMAINS,DraftEdit,GenerateRequest,Generation,ImportRequest,Schedule,PublishingSettings
+from .schemas import Collection,DOMAINS,DraftEdit,GenerateRequest,Generation,ImportRequest,Schedule,PublishingSettings,PublicationConfirmation,PublishingKeywords,PublicationStage
 from .store import Store
 from .publication_ledger import PublicationLedger
 from .publication_guard import PublicationGuard,digest
+from .toutiao_publisher import ToutiaoPublisher
+from .micro_runtime import MicroRuntime,DEFAULT_KEYWORDS
 
 ROOT=Path(__file__).resolve().parent.parent
 
 
-def create_app(data_dir=None,browser=None,llm=None):
+def create_app(data_dir=None,browser=None,llm=None,publisher=None):
     load_dotenv(ROOT/'.env')
     data_dir=Path(data_dir or os.environ.get('WORKBENCH_DATA_DIR',str(ROOT/'data')))
     data_dir.mkdir(parents=True,exist_ok=True)
@@ -39,20 +41,30 @@ def create_app(data_dir=None,browser=None,llm=None):
     publications=PublicationLedger(store)
     guard=PublicationGuard(publications,getattr(llm,"judge_duplicate",None),
         ready=lambda account: bool(account) and store.setting("publishing_account",{}).get("id")==account
-            and not store.setting("publication_import_error",False))
+            and not store.setting("publication_import_error",False),
+        expected_ai=lambda:store.setting("publishing",{}).get("ai_declaration",False))
+    publisher=publisher or ToutiaoPublisher(browser,
+        lambda:store.setting("publishing_account",{}).get("id",""),
+        expected_ai=lambda:store.setting("publishing",{}).get("ai_declaration",False))
+    micro=MicroRuntime(store,browser,llm,guard,publisher)
 
     @asynccontextmanager
     async def lifespan(app):
         publications.recover()
         import_verified_test()
         await engine.start()
-        yield
-        await engine.close()
+        await micro.start()
+        try:
+            yield
+        finally:
+            await micro.close()
+            await engine.close()
 
     app=FastAPI(title='头条内容工作台',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.engine=engine
     app.state.publications=publications
     app.state.publication_guard=guard
+    app.state.micro_runtime=micro
 
     def import_verified_test():
         preview_path=data_dir/"publishing-test-preview.json"
@@ -136,12 +148,15 @@ def create_app(data_dir=None,browser=None,llm=None):
         return FileResponse(ROOT/'static/index.html')
 
     def publishing_status():
-        enabled=store.setting('publishing',{'enabled':True})['enabled']
-        # No runtime publisher is installed yet. This state cannot be supplied
-        # by a client or inferred from enabling the preference.
-        return {'enabled':enabled,'ready':False,'running':False,
-                'state':'not_ready' if enabled else 'disabled',
-                'reason':'发布器与排期尚未接入，当前不会自动发帖。' if enabled else '自动发布已关闭。'}
+        result=micro.status()
+        day=micro._now().date().isoformat()
+        history=[row for row in publications.records(store.setting('publishing_account',{}).get('id','')) if row.get('created_at','').startswith(day)]
+        result.update(submitted_total=sum(row['status'] in ('submitted','published','rejected') for row in history),
+            published_total=sum(row['status']=='published' for row in history))
+        result.update(ai_declaration=store.setting('publishing',{}).get('ai_declaration',False),
+            keywords=store.setting('publishing_keywords',DEFAULT_KEYWORDS),
+            account=store.setting('publishing_account',{}).get('name','未绑定账号'))
+        return result
 
     @app.get('/api/publishing/settings')
     async def publishing_settings():
@@ -149,8 +164,65 @@ def create_app(data_dir=None,browser=None,llm=None):
 
     @app.put('/api/publishing/settings')
     async def save_publishing_settings(options:PublishingSettings):
+        previous=store.setting('publishing',{})
         store.set_setting('publishing',options.model_dump())
+        if previous.get('ai_declaration',False)!=options.ai_declaration:
+            store.set_setting('publishing_verification',{})
+            micro.pause('声明设置已变更，请验证并恢复')
         return publishing_status()
+
+    @app.put('/api/publishing/keywords')
+    async def publishing_keywords(options:PublishingKeywords):
+        store.set_setting('publishing_keywords',options.keywords)
+        return publishing_status()
+
+    @app.get('/api/publishing/queue')
+    async def publishing_queue():
+        return {'items':micro.queue.items(),'logs':store.setting('publishing_logs',[])}
+
+    @app.get('/api/publishing/today')
+    async def publishing_today():
+        return publishing_status()
+
+    @app.post('/api/publishing/bind')
+    async def publishing_bind():
+        async with micro._tick_lock:
+            try:account=await publisher.identify()
+            except Exception:raise HTTPException(409,'无法绑定账号，请确认专用浏览器已登录；已绑定账号不能自动更换') from None
+            previous=store.setting('publishing_account',{})
+            if previous.get('id')==account['id'] and previous.get('name'):account['name']=previous['name']
+            store.set_setting('publishing_account',account)
+            store.set_setting('publishing_verification',{})
+            micro.pause('账号已绑定，请验证并运行')
+        return publishing_status()
+
+    @app.post('/api/publishing/pause')
+    async def publishing_pause():
+        micro.pause('人工暂停')
+        return publishing_status()
+
+    @app.post('/api/publishing/resume')
+    async def publishing_resume():
+        try:await micro.resume()
+        except Exception:raise HTTPException(409,'发布验证失败，请在专用浏览器处理登录、账号或声明后重试') from None
+        return publishing_status()
+
+    @app.post('/api/publishing/queue/{identity}/confirm')
+    async def publishing_confirm(identity:str,options:PublicationConfirmation):
+        return await micro.confirm(identity,options.body_sha256)
+
+    @app.post('/api/publishing/queue/{identity}/reject')
+    async def publishing_reject(identity:str):
+        return await micro.reject(identity)
+
+    @app.post('/api/publishing/queue/{identity}/reconcile')
+    async def publishing_reconcile(identity:str):
+        try:return await micro.reconcile(identity)
+        except NeedsAttention as exc:raise HTTPException(409,str(exc)) from None
+
+    @app.post('/api/drafts/{identity}/queue')
+    async def stage_draft(identity:str,options:PublicationStage):
+        return await micro.stage(identity,options.topic,options.body_sha256)
 
     @app.get('/api/status')
     async def status():
@@ -169,8 +241,9 @@ def create_app(data_dir=None,browser=None,llm=None):
 
     @app.post('/api/session/open')
     async def open_session():
-        if engine.active_id:
-            raise HTTPException(409,'请先停止当前任务，再打开登录窗口')
+        if engine.active_id or micro.status()['running']:
+            raise HTTPException(409,'请等待当前任务完成，再打开登录窗口')
+        micro.pause('正在人工处理登录，完成后请验证并恢复')
         try:
             return await browser.login()
         except RuntimeError as exc:
@@ -184,8 +257,10 @@ def create_app(data_dir=None,browser=None,llm=None):
 
     @app.post('/api/session/clear')
     async def clear_session():
-        if engine.active_id:
-            raise HTTPException(409,'请先停止当前任务，再清除会话')
+        if engine.active_id or micro.status()['running']:
+            raise HTTPException(409,'请等待当前任务完成，再清除会话')
+        micro.pause('专用会话已清除，请登录后验证并恢复')
+        store.set_setting('publishing_verification',{})
         return await browser.clear()
 
     @app.post('/api/tasks/resume')
@@ -280,7 +355,14 @@ def create_app(data_dir=None,browser=None,llm=None):
 
     @app.put('/api/drafts/{identity}')
     async def edit_draft(identity:str,options:DraftEdit):
-        return store.edit_draft(identity,options.title,options.body,options.verify)
+        related=[row for row in micro.queue.items() if row['draft_id']==identity]
+        if any(row['status']=='publishing' for row in related):
+            raise HTTPException(409,'发布中的正文不可修改，请先核实提交结果')
+        result=store.edit_draft(identity,options.title,options.body,options.verify)
+        for row in related:
+            if row['status'] in ('pending','awaiting_confirmation') and any(result.get(k)!=row.get(k) for k in ('title','body','verify')):
+                await micro.reject(row['id'])
+        return result
 
     @app.get('/api/drafts/{identity}/export')
     async def export_draft(identity:str,format:Literal['md','txt']='md'):

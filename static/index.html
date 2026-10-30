@@ -67,7 +67,7 @@
           <button id="save-settings" class="button full">保存设置与定时条件</button>
         </section>
 
-        <section class="panel publishing-panel" aria-labelledby="publishing-heading">
+        <section id="publishing" class="panel publishing-panel" aria-labelledby="publishing-heading">
           <div class="section-heading"><span class="step">04</span><h3 id="publishing-heading">自动微头条</h3></div>
           <div class="publishing-control">
             <div><strong>自动发布</strong><p class="field-note">默认开启，修改后立即保存。关闭后保留已提交的内容。</p></div>
@@ -76,6 +76,18 @@
           <p id="publishing-state" class="publishing-state" role="status" aria-live="polite">正在读取发布设置…</p>
           <p id="publishing-reason" class="field-note">等待本地服务返回实际状态。</p>
           <p class="field-note">计划规则：北京时间 08:00–22:00，每日 24–30 条，民生／AI／科技。发布前去重，不声明首发。</p>
+          <label class="check-line"><input type="checkbox" id="publishing-ai" disabled>勾选“引用 AI”声明</label>
+          <p class="field-note">当前按你的要求关闭；如果平台强制要求声明或出现人工提示，会暂停提交。</p>
+          <div class="dialog-actions"><button class="button" id="publishing-bind">绑定当前登录账号</button><button class="button ink" id="publishing-resume">验证并运行</button><button class="button" id="publishing-pause">立即暂停</button><span id="publishing-account" class="muted"></span></div>
+          <div class="publishing-stats" id="publishing-stats"></div>
+          <p id="publishing-next" class="field-note"></p>
+          <details><summary>选题关键词</summary><div class="publishing-keywords">
+            <label>民生<input id="publishing-keywords-life" aria-label="民生关键词" placeholder="民生，公共服务"></label>
+            <label>AI<input id="publishing-keywords-ai" aria-label="AI关键词" placeholder="人工智能，大模型"></label>
+            <label>科技<input id="publishing-keywords-tech" aria-label="科技关键词" placeholder="科技，机器人"></label>
+          </div><p class="field-note">每个方向 1–5 个关键词，用逗号分隔；保存后下轮采集使用。</p><button id="publishing-keywords-save" class="button">保存选题关键词</button></details>
+          <details><summary>今日排期与发布队列</summary><div id="publishing-plan" class="publishing-plan"></div><div id="publishing-queue" class="publishing-queue"></div></details>
+          <details><summary>自动运行日志</summary><pre id="publishing-logs" class="publishing-logs"></pre></details>
         </section>
       </section>
 
@@ -122,8 +134,9 @@
     </form>
   </dialog>
   <dialog id="session-dialog"><div class="dialog-heading"><h3>专用浏览器会话</h3><button class="icon-button" data-close="session-dialog" aria-label="关闭">×</button></div><p id="session-detail">正在检查…</p><p class="field-note">登录在本机专用 Chrome 配置中完成，不读取你平时的浏览器资料。浏览器可用不代表账号已登录，请在窗口内确认。</p><div class="dialog-actions"><button id="session-check" class="button">检查状态</button><button id="session-clear" class="button">清除专用登录会话</button></div></dialog>
+  <dialog id="publication-dialog" class="wide-dialog"><div class="dialog-heading"><h3 id="publication-title">微头条预览</h3><button class="icon-button" data-close="publication-dialog" aria-label="关闭">×</button></div><p id="publication-meta" class="muted"></p><p id="publication-reason" class="field-note"></p><pre id="publication-body" class="publication-body"></pre><div id="publication-sources" class="draft-sources"></div><div class="dialog-actions"><button class="button primary" id="publication-confirm">确认此正文</button><button class="button" id="publication-reject">取消此排期</button><button class="button" id="publication-reconcile">核查平台结果</button></div></dialog>
   <dialog id="source-dialog" class="wide-dialog"><div class="dialog-heading"><h3 id="source-title">原文</h3><button class="icon-button" data-close="source-dialog" aria-label="关闭">×</button></div><p id="source-meta" class="muted"></p><a id="source-link" target="_blank" rel="noopener noreferrer">打开来源 ↗</a><div id="source-body" class="source-body"></div></dialog>
-  <dialog id="draft-dialog" class="wide-dialog"><div class="dialog-heading"><h3>编辑草稿 <span id="dirty-mark"></span></h3><button class="icon-button" id="draft-close" aria-label="关闭">×</button></div><label class="field-label" for="draft-title">标题</label><input id="draft-title" maxlength="300"><label class="field-label" for="draft-body">正文</label><textarea id="draft-body" rows="16"></textarea><label class="field-label" for="draft-verify">待核实事项 · 每行一项</label><textarea id="draft-verify" rows="3"></textarea><p class="field-note">查重范围为本工具记录的发布历史（含结果待核实），未同步的手动发文不在范围内。事件查重会调用模型；此按钮不会发布。</p><p id="draft-dedup-result" role="status" aria-live="polite"></p><div id="draft-sources" class="draft-sources"></div><p id="draft-meta" class="muted"></p><div class="dialog-actions"><button id="draft-save" class="button primary">保存修改</button><button id="draft-dedup" class="button">发送前查重</button><button id="draft-copy" class="button">复制正文</button><button id="draft-export-md" class="button">导出 Markdown</button><button id="draft-export-txt" class="button">导出纯文本</button></div></dialog>
+  <dialog id="draft-dialog" class="wide-dialog"><div class="dialog-heading"><h3>编辑草稿 <span id="dirty-mark"></span></h3><button class="icon-button" id="draft-close" aria-label="关闭">×</button></div><label class="field-label" for="draft-title">标题</label><input id="draft-title" maxlength="300"><label class="field-label" for="draft-body">正文</label><textarea id="draft-body" rows="16"></textarea><label class="field-label" for="draft-verify">待核实事项 · 每行一项</label><textarea id="draft-verify" rows="3"></textarea><p class="field-note">查重范围为本工具记录的发布历史（含结果待核实），未同步的手动发文不在范围内。事件查重会调用模型；此按钮不会发布。</p><p id="draft-dedup-result" role="status" aria-live="polite"></p><div id="draft-sources" class="draft-sources"></div><p id="draft-meta" class="muted"></p><div class="dialog-actions"><button id="draft-save" class="button primary">保存修改</button><label class="micro-topic">微头条方向 <select id="draft-micro-topic"><option>民生</option><option>AI</option><option selected>科技</option></select></label><button id="draft-stage" class="button">检查并排入微头条</button><button id="draft-dedup" class="button">发送前查重</button><button id="draft-copy" class="button">复制正文</button><button id="draft-export-md" class="button">导出 Markdown</button><button id="draft-export-txt" class="button">导出纯文本</button></div></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>

@@ -13,9 +13,10 @@ def digest(body):
 
 
 class PublicationGuard:
-    def __init__(self, ledger, judge, clock=None, ready=None):
+    def __init__(self, ledger, judge, clock=None, ready=None, expected_ai=None):
         self.ledger, self.judge = ledger, judge
         self.ready = ready or (lambda account: True)
+        self.expected_ai = expected_ai or (lambda: True)
         self.clock = clock or (lambda: datetime.now(ZoneInfo('Asia/Shanghai')))
 
     async def inspect(self, draft, account_id):
@@ -82,7 +83,7 @@ class PublicationGuard:
             checks = await preflight(json.loads(json.dumps(frozen)))
             if checks.get('account_id') != account_id or checks.get('body_sha256') != confirmed_sha256:
                 raise NeedsAttention('发布账号或编辑器正文与确认快照不一致')
-            check_publish_declarations(checks.get('exclusive') or {}, checks.get('ai') or {})
+            check_publish_declarations(checks.get('exclusive') or {}, checks.get('ai') or {},expected_ai=self.expected_ai())
             self.check_time()
             if not self.ready(account_id):
                 raise NeedsAttention('发布账号或历史回执尚未核实，未继续提交')

@@ -122,6 +122,16 @@ class Engine:
             finally:
                 self.active_id=None
 
+    async def browser_step(self,method,*args):
+        # Release between pages, so a due publication goes before the next
+        # collection step. No model request holds the browser lock.
+        idle=getattr(self.browser,'publishing_idle',None)
+        while True:
+            if idle is not None:await idle.wait()
+            async with self.browser.lock:
+                if idle is not None and not idle.is_set():continue
+                return await method(*args)
+
     async def collect(self,identity,options,is_import=False):
         kind=options.get('kind','article')
         kinds=options.get('kinds') or [kind]
@@ -130,63 +140,62 @@ class Engine:
         if options.get('auto_generate') and not self.llm.status()['configured']:
             raise ValueError('自动生成需要先配置模型；关闭自动生成仍可采集素材')
         self.store.update_task(identity,checked=0,accepted=0,unknown=0)
-        async with self.browser.lock:
-            if is_import:
-                cards=[{'url':u,'kind':'micro' if '/w/' in u else 'article'} for u in options['urls']]
-            else:
-                domains=options.get('domains') or [options.get('domain','')]
-                combinations=[(selected,domain) for domain in domains for selected in kinds]
-                total=options.get('limit',30)
-                if len(combinations)>total:
-                    raise ValueError('每轮检查上限小于所选体裁与领域组合数，请提高上限')
-                cards=[]
-                seen=set()
-                for index,(selected,domain) in enumerate(combinations):
-                    if self.stopped(identity):break
-                    keyword=' '.join(x for x in (options.get('keyword'),domain) if x)
-                    budget=total//len(combinations)+(1 if index<total%len(combinations) else 0)
-                    self.store.log(identity,f'搜索：{keyword} / {selected}，候选额度 {budget}；领域为关键词映射。')
-                    try:
-                        found=await self.browser.search(keyword,selected,budget)
-                    except ValueError as exc:
-                        self.store.log(identity,f'此组合未取得结果：{exc}')
-                        continue
-                    for card in found[:budget]:
-                        if card['url'] not in seen:
-                            cards.append(card)
-                            seen.add(card['url'])
-            self.store.log(identity,f'发现 {len(cards)} 个候选；仅对本轮发现结果筛选。')
-            for card in cards:
-                if self.stopped(identity): break
-                state=self.store.task(identity)
-                self.store.update_task(identity,checked=state['checked']+1)
+        if is_import:
+            cards=[{'url':u,'kind':'micro' if '/w/' in u else 'article'} for u in options['urls']]
+        else:
+            domains=options.get('domains') or [options.get('domain','')]
+            combinations=[(selected,domain) for domain in domains for selected in kinds]
+            total=options.get('limit',30)
+            if len(combinations)>total:
+                raise ValueError('每轮检查上限小于所选体裁与领域组合数，请提高上限')
+            cards=[]
+            seen=set()
+            for index,(selected,domain) in enumerate(combinations):
+                if self.stopped(identity):break
+                keyword=' '.join(x for x in (options.get('keyword'),domain) if x)
+                budget=total//len(combinations)+(1 if index<total%len(combinations) else 0)
+                self.store.log(identity,f'搜索：{keyword} / {selected}，候选额度 {budget}；领域为关键词映射。')
                 try:
-                    item=await self.browser.detail(card['url'],card.get('kind',kind))
-                    for field in ('author','published_at','published_raw','comments','likes'):
-                        if item.get(field) in (None,'') and card.get(field) not in (None,''):
-                            item[field]=card[field]
-                    if card.get('comments') is not None or card.get('likes') is not None:
-                        item['metrics_source']=card.get('search_url',item.get('url'))
-                    rows,unknown=select_items([item],{} if is_import else options)
-                    if unknown:
-                        state=self.store.task(identity)
-                        self.store.update_task(identity,unknown=state['unknown']+unknown)
-                    if not rows: continue
-                    row,new=self.store.upsert_material(item)
-                    state=self.store.task(identity)
-                    new_ids=state['new_ids']+([row['id']] if new and row['id'] not in state['new_ids'] else [])
-                    self.store.update_task(identity,accepted=state['accepted']+1,new_ids=new_ids)
-                    self.store.log(identity,('新增：' if new else '更新：')+item['title'][:80])
-                except NeedsAttention:
-                    raise
+                    found=await self.browser_step(self.browser.search,keyword,selected,budget)
                 except ValueError as exc:
+                    self.store.log(identity,f'此组合未取得结果：{exc}')
+                    continue
+                for card in found[:budget]:
+                    if card['url'] not in seen:
+                        cards.append(card)
+                        seen.add(card['url'])
+        self.store.log(identity,f'发现 {len(cards)} 个候选；仅对本轮发现结果筛选。')
+        for card in cards:
+            if self.stopped(identity): break
+            state=self.store.task(identity)
+            self.store.update_task(identity,checked=state['checked']+1)
+            try:
+                item=await self.browser_step(self.browser.detail,card['url'],card.get('kind',kind))
+                for field in ('author','published_at','published_raw','comments','likes'):
+                    if item.get(field) in (None,'') and card.get(field) not in (None,''):
+                        item[field]=card[field]
+                if card.get('comments') is not None or card.get('likes') is not None:
+                    item['metrics_source']=card.get('search_url',item.get('url'))
+                rows,unknown=select_items([item],{} if is_import else options)
+                if unknown:
                     state=self.store.task(identity)
-                    self.store.update_task(identity,errors=state['errors']+1)
-                    self.store.log(identity,f'跳过候选：{exc}')
-                except Exception:
-                    state=self.store.task(identity)
-                    self.store.update_task(identity,errors=state['errors']+1)
-                    self.store.log(identity,'候选读取失败，可能超时或浏览器已关闭。')
+                    self.store.update_task(identity,unknown=state['unknown']+unknown)
+                if not rows: continue
+                row,new=self.store.upsert_material(item)
+                state=self.store.task(identity)
+                new_ids=state['new_ids']+([row['id']] if new and row['id'] not in state['new_ids'] else [])
+                self.store.update_task(identity,accepted=state['accepted']+1,new_ids=new_ids)
+                self.store.log(identity,('新增：' if new else '更新：')+item['title'][:80])
+            except NeedsAttention:
+                raise
+            except ValueError as exc:
+                state=self.store.task(identity)
+                self.store.update_task(identity,errors=state['errors']+1)
+                self.store.log(identity,f'跳过候选：{exc}')
+            except Exception:
+                state=self.store.task(identity)
+                self.store.update_task(identity,errors=state['errors']+1)
+                self.store.log(identity,'候选读取失败，可能超时或浏览器已关闭。')
         if options.get('auto_generate') and not self.stopped(identity):
             # Persist the IDs so resume/retry does not lose new-item provenance.
             ids=self.store.task(identity)['new_ids'][:3]

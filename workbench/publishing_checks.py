@@ -15,8 +15,8 @@ def declaration_state(native_checked:bool,classes:str)->bool:
     return rendered
 
 
-def check_publish_declarations(exclusive:dict,ai:dict):
+def check_publish_declarations(exclusive:dict,ai:dict,expected_ai:bool=True):
     if declaration_state(exclusive.get('checked'),exclusive.get('classes','')):
         raise NeedsAttention('头条首发仍被选中，未继续提交')
-    if not declaration_state(ai.get('checked'),ai.get('classes','')):
-        raise NeedsAttention('引用AI尚未选中，未继续提交')
+    if declaration_state(ai.get('checked'),ai.get('classes','')) != expected_ai:
+        raise NeedsAttention('引用AI状态不符合当前设置，未继续提交')

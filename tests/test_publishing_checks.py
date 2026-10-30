@@ -23,3 +23,10 @@ class PublishingDeclarationTests(unittest.TestCase):
     def test_missing_visible_control_is_not_an_unchecked_declaration(self):
         for classes in ['',None,'unrelated-control']:
             with self.assertRaises(NeedsAttention): declaration_state(False,classes)
+
+    def test_ai_declaration_can_explicitly_be_disabled(self):
+        exclusive={'checked':False,'classes':'byte-checkbox'}
+        off={'checked':False,'classes':'byte-checkbox'}
+        on={'checked':True,'classes':'byte-checkbox byte-checkbox-checked'}
+        check_publish_declarations(exclusive,off,expected_ai=False)
+        with self.assertRaises(NeedsAttention):check_publish_declarations(exclusive,on,expected_ai=False)

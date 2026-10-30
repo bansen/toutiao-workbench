@@ -92,7 +92,7 @@ class APITests(unittest.TestCase):
         self.assertIs(config['enabled'],True)
         self.assertIs(config['ready'],False)
         self.assertIs(config['running'],False)
-        self.assertEqual(config['state'],'not_ready')
+        self.assertEqual(config['state'],'unverified')
         self.assertTrue(config['reason'])
         self.assertEqual(self.client.get('/api/status').json()['publishing'],config)
 
@@ -113,6 +113,60 @@ class APITests(unittest.TestCase):
             self.assertEqual(self.client.put(path,json={'enabled':False},headers=headers).status_code,403)
         for data in ({'enabled':'false'},{'enabled':True,'ready':True},{'enabled':True,'running':True}):
             self.assertEqual(self.client.put(path,json=data,headers=self.headers).status_code,422)
+
+
+
+    def test_runtime_pause_and_resume_have_live_status(self):
+        class Publisher:
+            async def probe(self):return {'account_id':'account','declaration_verified':True,'ai_declaration':False}
+            async def close(self):pass
+        runtime=self.app.state.micro_runtime
+        runtime.publisher=Publisher()
+        runtime.store.set_setting('publishing_account',{'id':'account'})
+        result=self.client.post('/api/publishing/resume',headers=self.headers)
+        self.assertEqual(result.status_code,200)
+        self.assertTrue(result.json()['ready'])
+        self.assertTrue(result.json()['service_active'])
+        result=self.client.post('/api/publishing/pause',headers=self.headers)
+        self.assertTrue(result.json()['paused'])
+        self.assertEqual(result.json()['state'],'paused')
+
+    def test_keyword_config_is_limited_to_three_directions(self):
+        path='/api/publishing/keywords'
+        self.assertEqual(self.client.put(path,json={'keywords':{'娱乐':['娱乐']}},headers=self.headers).status_code,422)
+        good={'民生':['公共服务'],'AI':['人工智能'],'科技':['机器人']}
+        self.assertEqual(self.client.put(path,json={'keywords':good},headers=self.headers).json()['keywords'],good)
+
+    def test_edit_cancels_queued_snapshot_but_cannot_modify_publishing_body(self):
+        runtime=self.app.state.micro_runtime;store=runtime.store
+        draft=store.save_generated('task','src',1,{'title':'排期稿','body':'正文快照','verify':[], 'sources':[{'url':'https://www.toutiao.com/article/7701979050666902079/'}]})
+        plan=runtime.plans.load(runtime._now().date())
+        slot=next(s for s in plan['slots'] if s['status']=='pending')
+        row=runtime.queue.add(slot,draft,'科技','event')
+        runtime.plans.update_slot(slot['id'],{'status':'queued'})
+        result=self.client.put('/api/drafts/'+draft['id'],json={'title':'排期稿','body':'新正文','verify':[]},headers=self.headers)
+        self.assertEqual(result.status_code,200)
+        self.assertEqual(runtime.queue.get(row['id'])['status'],'cancelled')
+        next_slot=next(s for s in plan['slots'] if s['status']=='pending' and s['id']!=slot['id'])
+        other=runtime.queue.add(next_slot,store.draft(draft['id']),'科技','event2')
+        runtime.queue.update(other['id'],{'status':'publishing'})
+        result=self.client.put('/api/drafts/'+draft['id'],json={'title':'排期稿','body':'不得修改','verify':[]},headers=self.headers)
+        self.assertEqual(result.status_code,409)
+        self.assertEqual(store.draft(draft['id'])['body'],'新正文')
+
+
+
+    def test_bind_uses_browser_identified_account_instead_of_request_fields(self):
+        class Publisher:
+            async def identify(self):return {'id':'browser-account','name':'已登录账号'}
+            async def close(self):pass
+        app=create_app(Path(self.tmp.name)/'binding',browser=FakeBrowser(),llm=FakeLLM(),publisher=Publisher())
+        with TestClient(app,base_url='http://127.0.0.1:8765') as client:
+            response=client.post('/api/publishing/bind',json={'id':'forged'},headers=self.headers)
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(app.state.engine.store.setting('publishing_account')['id'],'browser-account')
+            self.assertEqual(response.json()['account'],'已登录账号')
+            self.assertFalse(response.json()['ready'])
 
 
 if __name__=='__main__': unittest.main()

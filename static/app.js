@@ -186,12 +186,47 @@ async function loadTasks() {
   if (current) $('collection-progress').textContent=`${statusNames[current.status]} · 已检查 ${current.checked} / 已入选 ${current.accepted} · 未知排除 ${current.unknown}`;
 }
 
+const publishingNames={pending:'待发布',queued:'已备稿',awaiting_confirmation:'待人工处理',publishing:'发布中',submitted:'已提交／审核中',published:'已发布',rejected:'审核未通过',uncertain:'结果待核实',failed:'失败',skipped:'已跳过',cancelled:'已取消'};
+let publishingRows=[],publicationPreview=null;
 function renderPublishing(config) {
   $('publishing-enabled').checked=config.enabled;
-  $('publishing-enabled').disabled=false;
+  $('publishing-ai').checked=config.ai_declaration;
+  $('publishing-enabled').disabled=$('publishing-ai').disabled=false;
   $('publishing-state').dataset.state=config.state;
-  $('publishing-state').textContent=config.enabled?'设置已开启 · 未就绪，未运行':'自动发布已关闭';
-  $('publishing-reason').textContent=config.reason;
+  const labels={disabled:'自动发布已关闭',unverified:'设置已开启 · 待验证，未运行',paused:'自动发布已暂停',idle:'自动发布已就绪 · 等待运行时段',ready:config.running?'正在核查并发布':config.preparing?'正在自动选题与成稿':'自动执行中 · 等待下一排期'};
+  $('publishing-state').textContent=labels[config.state]||'状态待核实';
+  $('publishing-reason').textContent=config.reason||'按已保存排期执行，资料不足或检查失败时跳过，不补发。';
+  $('publishing-account').textContent='账号：'+config.account;
+  const counts=config.counts||{},slots=config.today?.slots||[];
+  const stats=[['今日目标',config.today?.target||0],['已提交',config.submitted_total??((counts.submitted||0)+(counts.published||0)+(counts.rejected||0))],['已发布',config.published_total??(counts.published||0)],['已跳过',slots.filter(s=>s.status==='skipped').length],['待核实',counts.uncertain||0]];
+  $('publishing-stats').innerHTML=stats.map(([label,value])=>`<span>${esc(label)}<b>${esc(value)}</b></span>`).join('');
+  $('publishing-next').textContent='下一排期：'+(config.next_at?dateText(config.next_at):'今天没有未来排期')+' · 程序'+(config.service_active?'正在运行':'未启动');
+  $('publishing-plan').innerHTML=slots.map(slot=>`<span class="publishing-slot" data-status="${esc(slot.status)}" title="${esc(slot.reason||publishingNames[slot.status]||slot.status)}">${esc(new Date(slot.scheduled_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Shanghai'}))} · ${esc(publishingNames[slot.status]||slot.status)}</span>`).join('');
+  for(const [id,topic] of [['life','民生'],['ai','AI'],['tech','科技']]) {
+    const input=$('publishing-keywords-'+id);
+    if(!input.dataset.loaded){input.value=(config.keywords?.[topic]||[]).join('，');input.dataset.loaded='1';}
+  }
+}
+
+async function loadPublishingQueue(){
+  const data=await api('/api/publishing/queue');publishingRows=data.items;
+  const today=state.status?.publishing?.today?.date;
+  $('publishing-queue').innerHTML=data.items.filter(row=>row.scheduled_at.startsWith(today||'')||row.status==='uncertain').map(row=>`<div class="publication-row"><div><strong>${esc(row.title)}</strong><p>${esc(row.topic)} · ${esc(dateText(row.scheduled_at))} · ${esc(publishingNames[row.status]||row.status)}</p></div><button class="button" data-publication="${esc(row.id)}">查看正文与结果</button></div>`).join('');
+  $('publishing-logs').textContent=(data.logs||[]).map(log=>`${dateText(log.at)}  ${log.message}`).join('\n')||'等待运行记录';
+}
+
+function showPublication(identity){
+  const row=publishingRows.find(item=>item.id===identity);if(!row)return;
+  publicationPreview=row;
+  $('publication-title').textContent=row.title;
+  $('publication-meta').textContent=`${row.topic} · ${dateText(row.scheduled_at)} · ${publishingNames[row.status]||row.status}`;
+  $('publication-reason').textContent=row.reason||'发布只提交以下正文，内部管理标题不发布。';
+  $('publication-body').textContent=row.body;
+  $('publication-sources').innerHTML=(row.sources||[]).map(source=>`<a href="${esc(source.url)}" target="_blank" rel="noopener noreferrer">${esc(source.title||source.url)} ↗</a>`).join('');
+  $('publication-confirm').hidden=row.status!=='awaiting_confirmation';
+  $('publication-reject').hidden=!['pending','awaiting_confirmation'].includes(row.status);
+  $('publication-reconcile').hidden=!['uncertain','submitted'].includes(row.status);
+  $('publication-dialog').showModal();
 }
 
 async function refreshStatus(initial=false) {
@@ -235,7 +270,7 @@ function updateKindFields(){
 
 async function refreshAll(initial=false) {
   await refreshStatus(initial);
-  await Promise.all([loadMaterials(),loadDrafts(),loadTasks()]);
+  await Promise.all([loadMaterials(),loadDrafts(),loadTasks(),loadPublishingQueue()]);
 }
 
 async function openSource(identity) {
@@ -253,6 +288,7 @@ async function openDraft(identity) {
   $('dirty-mark').textContent='';
   $('draft-title').value=draft.title;
   $('draft-body').value=draft.body;
+  $('draft-micro-topic').value=draft.options?.topic||'科技';
   $('draft-verify').value=(draft.verify||[]).join('\n');
   $('draft-sources').innerHTML='<strong>资料来源</strong>'+(draft.sources||[]).map(source=>`<a target="_blank" rel="noopener noreferrer" href="${esc(source.url)}">${esc(source.title||source.url)} ↗</a>`).join('');
   $('draft-meta').textContent=`${draft.model} · ${dateText(draft.created_at)} · ${draft.options?.style||''} · 版本 ${draft.version}`;
@@ -381,7 +417,7 @@ let polling=false;
 setInterval(async()=>{
   if(polling||document.hidden)return;polling=true;
   try{
-    await refreshStatus();await loadTasks();
+    await refreshStatus();await loadTasks();await loadPublishingQueue();
     if(state.tab==='materials')await loadMaterials();
     if(state.tab==='drafts')await loadDrafts();
   }catch(error){$('session-state').textContent='本地服务连接中断';}
@@ -414,12 +450,12 @@ act('draft-dedup',async()=>{
 
 $('publishing-enabled').addEventListener('change',async()=>{
   const toggle=$('publishing-enabled');
-  publishingSaving=true;publishingRevision++;toggle.disabled=true;
+  publishingSaving=true;publishingRevision++;toggle.disabled=true;$('publishing-ai').disabled=true;
   $('publishing-state').textContent='正在保存发布设置…';
   try {
-    const result=await api('/api/publishing/settings','PUT',{enabled:toggle.checked});
+    const result=await api('/api/publishing/settings','PUT',{enabled:toggle.checked,ai_declaration:$('publishing-ai').checked});
     renderPublishing(result);
-    toast(result.enabled?'自动发布设置已开启；当前发布器未就绪，尚未运行':'自动发布已关闭');
+    toast(result.enabled?'自动发布设置已开启，执行状态见面板':'自动发布已关闭');
   } catch(error) {
     toggle.disabled=true;
     $('publishing-state').textContent='无法确认设置是否保存，请等待重新连接';
@@ -427,3 +463,26 @@ $('publishing-enabled').addEventListener('change',async()=>{
     toast(error.message,true);
   } finally {publishingSaving=false;}
 });
+
+$('publishing-ai').addEventListener('change',()=>{$('publishing-enabled').dispatchEvent(new Event('change'));});
+act('publishing-resume',async()=>{await api('/api/publishing/resume','POST');await refreshStatus();toast('已核实发布账号与声明，运行状态见面板');});
+act('publishing-pause',async()=>{await api('/api/publishing/pause','POST');await refreshStatus();toast('已暂停后续发布，已提交内容不撤回');});
+act('publishing-keywords-save',async()=>{
+  const keywords={};for(const [id,topic] of [['life','民生'],['ai','AI'],['tech','科技']])keywords[topic]=$('publishing-keywords-'+id).value.split(/[,，\n]/).map(v=>v.trim()).filter(Boolean);
+  await api('/api/publishing/keywords','PUT',{keywords});toast('选题关键词已保存，下轮使用');
+});
+document.addEventListener('click',event=>{const button=event.target.closest('[data-publication]');if(button)showPublication(button.dataset.publication);});
+for(const action of ['confirm','reject','reconcile'])act('publication-'+action,async()=>{
+  if(!publicationPreview)return;const row=publicationPreview;
+  await api(`/api/publishing/queue/${row.id}/${action}`,'POST',action==='confirm'?{body_sha256:row.body_sha256}:undefined);
+  $('publication-dialog').close();await loadPublishingQueue();await refreshStatus();toast('处理完成，状态已更新');
+});
+act('draft-stage',async()=>{
+  await saveDraft();
+  const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode($('draft-body').value));
+  const body_sha256=[...new Uint8Array(bytes)].map(v=>v.toString(16).padStart(2,'0')).join('');
+  await api(`/api/drafts/${state.editing}/queue`,'POST',{topic:$('draft-micro-topic').value,body_sha256});
+  await refreshStatus();await loadPublishingQueue();toast('已通过检查，排入未来一小时空闲时段');
+});
+
+act('publishing-bind',async()=>{await api('/api/publishing/bind','POST');await refreshStatus();toast('已绑定当前专用浏览器账号，请验证并运行');});

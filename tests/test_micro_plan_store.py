@@ -55,3 +55,64 @@ class DailyPlanStoreTests(unittest.TestCase):
             plans.get_or_create(datetime(2026,10,30,7,tzinfo=TZ),random.Random(1))
             old=plans.get_or_create(datetime(2026,10,29,7,tzinfo=TZ),random.Random(9))
             self.assertTrue(all(s['status']=='skipped' for s in old['slots']))
+
+    def test_load_and_atomic_constrained_slot_update(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plans=MicroPlanStore(Store(Path(tmp)/'workbench.db'))
+            self.assertIsNone(plans.load('2026-10-29'))
+            plan=plans.get_or_create(datetime(2026,10,29,7,tzinfo=TZ),random.Random(4))
+            slot=plan['slots'][0]
+            updated=plans.update_slot(slot['id'],{'status':'queued','queue_id':'queue-1'},expected_statuses=['pending'])
+            self.assertEqual(updated['slots'][0]['status'],'queued')
+            self.assertEqual(plans.load(plan['date']),updated)
+            for changes in [{'id':'changed'},{'scheduled_at':'changed'},{'target':1},{'unknown':True}]:
+                with self.assertRaises(ValueError):
+                    plans.update_slot(slot['id'],changes)
+            with self.assertRaises(ValueError):
+                plans.update_slot(slot['id'],{'status':'pending'},expected_statuses=['pending'])
+            with self.assertRaises(KeyError):
+                plans.update_slot('absent',{'status':'queued'})
+
+    def test_terminal_plan_slots_cannot_resurrect(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plans=MicroPlanStore(Store(Path(tmp)/'workbench.db'))
+            plan=plans.get_or_create(datetime(2026,10,29,7,tzinfo=TZ),random.Random(4))
+            for slot,status in zip(plan['slots'],['skipped','completed']):
+                plans.update_slot(slot['id'],{'status':status})
+                with self.assertRaises(ValueError):
+                    plans.update_slot(slot['id'],{'status':'pending'})
+
+    def test_conditional_slot_claim_is_atomic_between_connections(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'workbench.db'
+            plans=MicroPlanStore(Store(path))
+            plan=plans.get_or_create(datetime(2026,10,29,7,tzinfo=TZ),random.Random(4))
+            slot_id=plan['slots'][0]['id']
+            def claim(_):
+                try:
+                    MicroPlanStore(Store(path)).update_slot(slot_id,{'status':'queued'},expected_statuses=['pending'])
+                    return True
+                except ValueError:
+                    return False
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                self.assertEqual(sum(executor.map(claim,range(12))),1)
+            self.assertEqual(plans.load(plan['date'])['slots'][0]['status'],'queued')
+
+    def test_possible_submission_plan_slots_cannot_be_reactivated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plans=MicroPlanStore(Store(Path(tmp)/'workbench.db'))
+            plan=plans.get_or_create(datetime(2026,10,29,7,tzinfo=TZ),random.Random(4))
+            for slot,state in zip(plan['slots'],['publishing','submitted','uncertain']):
+                plans.update_slot(slot['id'],{'status':'queued'})
+                plans.update_slot(slot['id'],{'status':'publishing'})
+                if state!='publishing':
+                    plans.update_slot(slot['id'],{'status':state})
+                for forbidden in ['pending','queued','awaiting_confirmation','skipped','cancelled','failed']:
+                    with self.assertRaises(ValueError):
+                        plans.update_slot(slot['id'],{'status':forbidden})
+                if state=='uncertain':
+                    with self.assertRaises(ValueError):
+                        plans.update_slot(slot['id'],{'status':'publishing'})
+                plans.update_slot(slot['id'],{'status':'published'})
+                self.assertEqual(next(s for s in plans.load(plan['date'])['slots'] if s['id']==slot['id'])['status'],'published')
