@@ -40,6 +40,14 @@ class ParsingTests(unittest.TestCase):
         rows, _ = select_items(items, {'sort':'reads'})
         self.assertEqual(rows[-1]['id'],4)
 
+    def test_creator_month_day_timestamps_count_manual_posts(self):
+        now=datetime(2026,10,30,17,0,tzinfo=ZoneInfo('Asia/Hong_Kong'))
+        self.assertEqual(parse_time('10-30 16:56',now),'2026-10-30T16:56:00+08:00')
+        self.assertEqual(parse_time('10-29 12:54',now),'2026-10-29T12:54:00+08:00')
+        january=datetime(2026,1,1,12,tzinfo=ZoneInfo('Asia/Hong_Kong'))
+        self.assertEqual(parse_time('12-31 23:30',january),'2025-12-31T23:30:00+08:00')
+        self.assertIsNone(parse_time('13-40 25:61',now))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -232,7 +232,12 @@ class ToutiaoPublisher:
             text=row.locator('.wtt-text')
             if not await text.count():continue
             content=text.locator('.overflow-handler-container')
-            raw=await content.first.inner_text() if await content.count() else re.sub(r'\s*展开\s*$','',await text.inner_text())
+            container=content.first if await content.count() else text
+            raw=await container.evaluate("""element => {
+                const copy=element.cloneNode(true);
+                copy.querySelectorAll('.expand-span, .more-span').forEach(node=>node.remove());
+                return copy.textContent;
+            }""")
             if compact(raw)==compact(draft['body']):matches.append(row)
         if len(matches)!=1:raise NeedsAttention('未在当前作品记录中找到唯一匹配正文，结果待核实，禁止重发')
         row=matches[0]

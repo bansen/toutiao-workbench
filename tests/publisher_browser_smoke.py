@@ -11,12 +11,12 @@ async def main():
   browser=Browser(Path(directory)/'profile')
   clicks=[]
   audit={'tags':'已发布'}
-  body='测试第一段。\n\n第二段，来源为测试资料。'
+  body='测试第一段。\n\n第二段，来源为测试资料。正文真实结尾：展开'
   try:
    await browser.start()
    async def creator(route):
     if '/manage/content/' in route.request.url:
-     document=f'''<a href="https://www.toutiao.com/c/user/12345678901/">账号</a><div class="post-item"><div class="wtt-text" onclick="window.open('https://www.toutiao.com/w/1880433446879241/')"><div class="overflow-handler-container">{html.escape(body)}</div><span>展开</span></div><div class="tags">{audit["tags"]}</div><div class="time">今天 09:00</div></div>'''
+     document=f'''<a href="https://www.toutiao.com/c/user/12345678901/">账号</a><div class="post-item"><div class="wtt-text" onclick="window.open('https://www.toutiao.com/w/1880433446879241/')"><div class="overflow-handler-container">{html.escape(body)}<span class="expand-span"><span class="more-span">展开</span></span></div></div><div class="tags">{audit["tags"]}</div><div class="time">今天 09:00</div></div>'''
     else:
      document='''<a href="https://www.toutiao.com/c/user/12345678901/">账号</a><div class="ProseMirror" contenteditable="true" style="white-space:pre-wrap"></div>
      <label class="byte-checkbox"><input type="checkbox"><span>头条首发</span></label>

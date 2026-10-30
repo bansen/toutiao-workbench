@@ -101,10 +101,11 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.runtime.start(); await self.runtime.close()
         self.assertEqual(self.runtime.queue.get(row['id'])['status'],'uncertain'); self.assertTrue(self.runtime.status()['paused'])
     async def test_reconcile_never_submits(self):
-        row,_=self.enqueue(); self.runtime.queue.update(row['id'],{'status':'publishing'}); self.runtime.queue.update(row['id'],{'status':'uncertain'})
+        row,_=self.enqueue(); self.runtime.queue.update(row['id'],{'status':'publishing'}); self.runtime.queue.update(row['id'],{'status':'uncertain','reason':'发布结果待核实'})
         self.runtime.plans.update_slot(row['slot_id'],{'status':'publishing'}); self.runtime.plans.update_slot(row['slot_id'],{'status':'uncertain'})
         await self.runtime.reconcile(row['id'])
         self.assertEqual(self.publisher.calls,0); self.assertEqual(self.runtime.queue.get(row['id'])['status'],'published')
+        self.assertEqual(self.runtime.queue.get(row['id'])['reason'],'')
     async def test_prepare_only_future_hour_and_browser_steps_lock(self):
         self.plan(); self.now-=timedelta(minutes=5); await self.runtime.verify()
         await self.runtime.prepare()

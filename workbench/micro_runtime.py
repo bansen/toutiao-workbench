@@ -527,6 +527,8 @@ class MicroRuntime:
             if receipt.get('status') not in {'submitted', 'published', 'rejected', 'uncertain'}:
                 raise ValueError('回执无效')
             changes = {'status': receipt['status'], 'receipt': receipt}
+            if receipt['status'] in {'published', 'submitted', 'rejected'}:
+                changes['reason'] = receipt.get('platform_status', '') if receipt['status'] == 'rejected' else ''
             ledger = getattr(self.guard, 'ledger', None)
             if ledger and row.get('publication_id'):
                 ledger.update(row['publication_id'], receipt['status'], receipt)

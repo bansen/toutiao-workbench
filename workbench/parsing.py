@@ -46,6 +46,14 @@ def parse_time(text, now=None):
     try:
         if full:
             return datetime(*map(int, full.groups()), tzinfo=TZ).isoformat()
+        abbreviated = re.search(r'(?<!\d)(\d{1,2})[-月/](\d{1,2})日?\s+(\d{1,2}):(\d{2})', text)
+        if abbreviated:
+            month,day,hour,minute=map(int,abbreviated.groups())
+            stamp=datetime(now.year,month,day,hour,minute,tzinfo=now.tzinfo or TZ)
+            # Creator lists omit the year for already-published historical posts.
+            if stamp>now:
+                stamp=stamp.replace(year=now.year-1)
+            return stamp.isoformat()
         m = re.search(r'(\d+)\s*(分钟|小时|天)前', text)
         if m:
             return (now-timedelta(**{dict(分钟='minutes', 小时='hours', 天='days')[m[2]]:int(m[1])})).isoformat()
