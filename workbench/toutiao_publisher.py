@@ -149,15 +149,27 @@ class ToutiaoPublisher:
         return identity['id']
 
     def label(self,name):
-        return self.page.locator('label').filter(has=self.page.get_by_text(name,exact=True))
+        return self.page.locator('label:visible').filter(has=self.page.get_by_text(name,exact=True))
+
+    async def _declaration_control(self,name):
+        # The editor and account link can render before the declaration panel.
+        # Wait for one visible component; never infer unchecked from absence.
+        for _ in range(40):
+            label=self.label(name)
+            label_count=await label.count()
+            control_count=0
+            if label_count==1:
+                control=label.locator('input[type="checkbox"]')
+                control_count=await control.count()
+                if control_count==1:
+                    return label,control
+            await asyncio.sleep(.2)
+        raise NeedsAttention(f'发布声明控件不可识别：{name}（可见标签{label_count}，复选框{control_count}）')
 
     async def declarations(self,apply=False):
         result={}
         for name,key,desired in [('头条首发','exclusive',False),('引用AI','ai',self.expected_ai())]:
-            label=self.label(name)
-            if await label.count()!=1 or await label.locator('input[type="checkbox"]').count()!=1:
-                raise NeedsAttention('发布声明控件不可识别：'+name)
-            control=label.locator('input[type="checkbox"]')
+            label,control=await self._declaration_control(name)
             # The platform can auto-select first release after text is filled;
             # styles can also lag. Cancel once, then require three stable samples.
             stable=0

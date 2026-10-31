@@ -21,8 +21,14 @@ async def main():
      document='''<a href="https://www.toutiao.com/c/user/12345678901/">账号</a><div class="ProseMirror" contenteditable="true" style="white-space:pre-wrap"></div>
      <label class="byte-checkbox"><input type="checkbox"><span>头条首发</span></label>
      <label class="byte-checkbox byte-checkbox-checked"><input type="checkbox" checked><span>引用AI</span></label>
+     <label class="byte-checkbox byte-checkbox-checked" style="display:none"><input type="checkbox" checked><span>头条首发</span></label>
      <button onclick="window.clicked();location.href='/profile_v4/manage/content/all'">发布</button>
-     <script>document.querySelectorAll('input').forEach(i=>i.onchange=()=>i.parentElement.classList.toggle('byte-checkbox-checked',i.checked))</script>'''
+     <script>
+     document.querySelectorAll('input').forEach(i=>i.onchange=()=>i.parentElement.classList.toggle('byte-checkbox-checked',i.checked));
+     const declarations=[...document.querySelectorAll('label')];
+     declarations.forEach(e=>e.remove());
+     setTimeout(()=>declarations.forEach(e=>document.body.appendChild(e)),700);
+     </script>'''
     await route.fulfill(content_type='text/html; charset=utf-8',body=document)
    async def public(route):await route.fulfill(content_type='text/html; charset=utf-8',body='<article style="white-space:pre-wrap">'+html.escape(body)+'</article>')
    await browser.context.route('https://mp.toutiao.com/**',creator)

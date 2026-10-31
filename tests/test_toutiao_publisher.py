@@ -61,6 +61,39 @@ class PublisherEditorTests(unittest.IsolatedAsyncioTestCase):
         self.editor.fill.assert_awaited_once_with('正文\n\n第二段')
 
 class PublisherDeclarationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_declarations_wait_for_delayed_checkbox_render_without_submitting(self):
+        from unittest.mock import AsyncMock, Mock, patch
+        from workbench.toutiao_publisher import ToutiaoPublisher
+        publisher=ToutiaoPublisher(Mock(),lambda:'account',expected_ai=lambda:False)
+        labels={}
+        for name in ('头条首发','引用AI'):
+            label=Mock();control=Mock()
+            label.count=AsyncMock(side_effect=[0,0,1,1,1])
+            label.locator.return_value=control
+            control.count=AsyncMock(return_value=1)
+            control.is_checked=AsyncMock(return_value=False)
+            label.get_attribute=AsyncMock(return_value='byte-checkbox')
+            label.get_by_text.return_value.click=AsyncMock()
+            labels[name]=label
+        publisher.label=lambda name:labels[name]
+        with patch('workbench.toutiao_publisher.asyncio.sleep',new=AsyncMock()):
+            result=await publisher.declarations(apply=True)
+        self.assertFalse(result['exclusive']['checked'])
+        self.assertFalse(result['ai']['checked'])
+        labels['头条首发'].get_by_text.return_value.click.assert_not_awaited()
+
+    async def test_persistently_ambiguous_declaration_is_not_clicked(self):
+        from unittest.mock import AsyncMock, Mock, patch
+        from workbench.toutiao_publisher import ToutiaoPublisher
+        from workbench.browser import NeedsAttention
+        publisher=ToutiaoPublisher(Mock(),lambda:'account',expected_ai=lambda:False)
+        label=Mock();label.count=AsyncMock(return_value=2)
+        label.get_by_text.return_value.click=AsyncMock()
+        publisher.label=lambda name:label
+        with patch('workbench.toutiao_publisher.asyncio.sleep',new=AsyncMock()):
+            with self.assertRaises(NeedsAttention):await publisher.declarations(apply=True)
+        label.get_by_text.return_value.click.assert_not_awaited()
+
     async def test_waits_for_component_style_after_native_value_changes(self):
         from unittest.mock import AsyncMock, Mock
         from workbench.toutiao_publisher import ToutiaoPublisher
