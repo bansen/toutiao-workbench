@@ -43,6 +43,32 @@ class Content:
         assert not self.browser.lock.locked()
         return {'passed':True,'issues':[]}
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_hanging_fact_check_times_out_and_releases_scheduler(self):
+        row,_=self.enqueue();await self.runtime.verify()
+        self.runtime.publish_timeout=.02
+        async def hang(*args):await asyncio.Event().wait()
+        self.runtime.content.check=hang
+        await asyncio.wait_for(self.runtime.tick(),.5)
+        self.assertEqual(self.publisher.calls,0)
+        self.assertEqual(self.runtime.queue.get(row['id'])['status'],'failed')
+        self.assertFalse(self.runtime.status()['running'])
+        self.assertTrue(self.browser.publishing_idle.is_set())
+        self.assertFalse(self.runtime._tick_lock.locked())
+        self.assertIn('超时',str(self.store.setting('publishing_logs')))
+
+    async def test_timeout_after_submit_starts_is_uncertain_and_not_retried(self):
+        row,_=self.enqueue();await self.runtime.verify()
+        self.runtime.publish_timeout=.02
+        async def hang(draft):
+            self.publisher.calls+=1
+            await asyncio.Event().wait()
+        self.publisher.submit=hang
+        await asyncio.wait_for(self.runtime.tick(),.5)
+        await self.runtime.tick()
+        self.assertEqual(self.publisher.calls,1)
+        self.assertEqual(self.runtime.queue.get(row['id'])['status'],'uncertain')
+        self.assertTrue(self.runtime.status()['paused'])
+
     async def test_incorrect_type_in_news_queue_is_not_submitted(self):
         from workbench.ai_tools import PROFILE
         self.plan(); await self.runtime.verify(); self.runtime.ai_tools=True

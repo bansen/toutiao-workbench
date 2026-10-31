@@ -43,6 +43,9 @@ class MicroRuntime:
         self._closed, self._running, self._last_tick, self._last_prepare = False, False, None, None
         self._last_retention = None
         self._active_slot = None
+        self.publish_timeout = 180
+        self._publish_phase = ''
+        self._publish_started_at = None
         self.publisher.allowed = self._allowed
         if not hasattr(browser, 'publishing_idle'):
             browser.publishing_idle = asyncio.Event()
@@ -79,6 +82,10 @@ class MicroRuntime:
     def _log(self, reason):
         logs = self.store.setting('publishing_logs', [])
         self.store.set_setting('publishing_logs', (logs + [{'at': self._now().isoformat(), 'message': reason}])[-100:])
+
+    def _phase(self, name):
+        self._publish_phase = name
+        self._log('发布阶段：'+name)
 
     def _pause_revision(self):
         return int((self.store.setting('publishing_pause', {}) or {}).get('revision', 0))
@@ -364,6 +371,8 @@ class MicroRuntime:
         ready, enabled = self._ready(), self._enabled()
         mix_rows = [r for r in rows if r['scheduled_at'].startswith(plan.get('date','!')) and r['status'] in {'submitted','published','rejected'}]
         return {'enabled': enabled, 'ready': ready, 'running': self._running,
+                'publish_phase':self._publish_phase,
+                'publish_elapsed_seconds':int((now-self._publish_started_at).total_seconds()) if self._running and self._publish_started_at else 0,
                 'content_mix_submitted': {kind:sum(content_kind(r)==kind for r in mix_rows) for kind in (NEWS,GUIDE)},
                 'state': 'paused' if pause.get('paused') else ('disabled' if not enabled else (('ready' if 8 <= now.hour < 22 else 'idle') if ready else 'unverified')),
                 'reason': pause.get('reason', '') if pause.get('paused') else (('' if 8 <= now.hour < 22 else '等待北京时间08:00发布窗口') if ready else ('模型配置缺失，请先配置模型' if not self._model_ready() else '请先核实发布账号与声明')),
@@ -381,12 +390,15 @@ class MicroRuntime:
         self.plans.update_slot(slot_id, {'status': 'skipped', 'reason': reason})
         self._log('跳过排期：' + reason)
 
-    async def _browser_step(self, method, *args):
-        while True:
-            await self.browser.publishing_idle.wait()
-            async with self.browser.lock:
-                if self.browser.publishing_idle.is_set():
-                    return await method(*args)
+    async def _browser_step(self, method, *args, priority=False):
+        async def operation():
+            while True:
+                if not priority:
+                    await self.browser.publishing_idle.wait()
+                async with self.browser.lock:
+                    if priority or self.browser.publishing_idle.is_set():
+                        return await method(*args)
+        return await asyncio.wait_for(operation(),60)
 
     async def _refresh(self, draft, priority=False):
         refreshed = []
@@ -394,11 +406,7 @@ class MicroRuntime:
             official = source.get('kind') == 'official'
             method = self.browser.official_detail if official else self.browser.detail
             detail_arg = source.get('author', 'AI工具').removesuffix(' 官方文档') if official else source.get('kind', 'micro' if '/w/' in source['url'] else 'article')
-            if priority:
-                async with self.browser.lock:
-                    row = await method(source['url'], detail_arg)
-            else:
-                row = await self._browser_step(method, source['url'], detail_arg)
+            row = await self._browser_step(method, source['url'], detail_arg, priority=priority)
             if not isinstance(row, dict) or not row.get('body', row.get('content', '')).strip():
                 raise ValueError('来源正文不可见')
             if source.get('news_category'):
@@ -439,14 +447,19 @@ class MicroRuntime:
                 if not self._within_limits(now, plan['target']):
                     self._skip(slot['id'], row, '达到每日上限或不足15分钟间隔')
                     continue
-                await self._publish(slot, row)
+                try:
+                    await asyncio.wait_for(self._publish(slot, row), self.publish_timeout)
+                except asyncio.TimeoutError:
+                    self._log('发布任务总超时，已停止等待；提交前失败不重跑，可能已提交则核查回执')
 
     async def _publish(self, slot, row):
         self.browser.publishing_idle.clear()
         self._running = True
+        self._publish_started_at = self._now()
         claimed = False
         submit_started = False
         stage = '来源检查'
+        self._phase(stage)
         try:
             draft = self.store.draft(row['draft_id'])
             if self.ai_tools and (draft.get('options') or {}).get('profile') != PROFILE:
@@ -458,6 +471,8 @@ class MicroRuntime:
                 self.plans.update_slot(slot['id'], {'status': 'skipped', 'reason': '草稿已编辑'})
                 return
             sources = await self._refresh(draft, priority=True)
+            stage = '稿件事实复检'
+            self._phase(stage)
             check = await self.content.check({**row, 'source_snapshots': draft.get('source_snapshots', []), 'editorial_review':draft.get('editorial_review', []), 'recent_titles':self._recent_titles(exclude_draft_id=draft['id'])}, sources, row['topic'])
             if check.get('passed') is not True:
                 issues = [v for v in check.get('issues', []) if isinstance(v, str) and v.strip()]
@@ -475,9 +490,11 @@ class MicroRuntime:
             claimed = True
             self.plans.update_slot(slot['id'], {'status': 'publishing'})
             stage = '发布历史查重'
+            self._phase(stage)
             async def preflight(snapshot):
                 nonlocal stage
                 stage = '编辑器与声明检查'
+                self._phase(stage)
                 if not self._allowed():
                     raise NeedsAttention('发布条件已变化')
                 checks = await self.publisher.preflight(snapshot)
@@ -490,6 +507,7 @@ class MicroRuntime:
                     raise NeedsAttention('发布条件已变化')
                 submit_started = True
                 stage = '提交与回执核查'
+                self._phase(stage)
                 return await self.publisher.submit(snapshot)
             record = await self.guard.send(row, self._account(), row['body_sha256'], preflight, submit)
             receipt = record.get('receipt', record)
@@ -529,8 +547,9 @@ class MicroRuntime:
             else:
                 current = self.queue.get(row['id'])
                 if current['status'] == 'pending':
-                    self.queue.update(row['id'], {'status': 'failed', 'reason': '来源或模型检查不可用'})
-                    self.plans.update_slot(slot['id'], {'status': 'skipped', 'reason': '来源或模型检查不可用'})
+                    reason = f'{stage}超时或中断，未点击发布' if isinstance(exc, (asyncio.CancelledError,asyncio.TimeoutError)) else f'{stage}不可用，未点击发布'
+                    self.queue.update(row['id'], {'status': 'failed', 'reason': reason})
+                    self.plans.update_slot(slot['id'], {'status': 'skipped', 'reason': reason})
                 if isinstance(exc, NeedsAttention):
                     self.pause('来源访问需要人工处理登录、验证码或限制')
                 self._log('发布前检查失败，未发送')
@@ -539,10 +558,14 @@ class MicroRuntime:
         finally:
             self._active_slot = None
             try:
-                await self.publisher.close()
+                await asyncio.wait_for(self.publisher.close(),10)
+            except asyncio.TimeoutError:
+                self._log('关闭发布窗口超过时限，保留原提交状态，不重发')
             finally:
                 self.browser.publishing_idle.set()
                 self._running = False
+                self._publish_phase = ''
+                self._publish_started_at = None
 
     def _postprocess_receipt(self, receipt, status):
         platform_count = receipt.get('visible_today_count')

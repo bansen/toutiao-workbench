@@ -4,6 +4,8 @@ import re
 
 import httpx
 
+MODEL_TOTAL_TIMEOUT = 95
+
 
 def build_messages(sources,options,version):
     return [
@@ -75,6 +77,12 @@ class LLM:
         return {'decision':result['decision'],'matched_id':match or None,'reason':result['reason'].strip()[:500]}
 
     async def _complete_json(self,messages):
+        try:
+            return await asyncio.wait_for(self._complete_json_request(messages), MODEL_TOTAL_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise ValueError('模型请求超过总时限，已停止本次请求，可稍后重试') from None
+
+    async def _complete_json_request(self,messages):
         if not self.status()['configured']:
             raise ValueError('请在模型设置或 .env 中配置模型服务后重试')
         if not self.base_url.startswith(('https://','http://')):

@@ -193,7 +193,7 @@ function renderPublishing(config) {
   $('publishing-ai').checked=config.ai_declaration;
   $('publishing-enabled').disabled=$('publishing-ai').disabled=false;
   $('publishing-state').dataset.state=config.state;
-  const labels={disabled:'自动发布已关闭',unverified:'设置已开启 · 待验证，未运行',paused:'自动发布已暂停',idle:'自动发布已就绪 · 等待运行时段',ready:config.running?'正在核查并发布':config.preparing?'正在自动选题与成稿':'自动执行中 · 等待下一排期'};
+  const labels={disabled:'自动发布已关闭',unverified:'设置已开启 · 待验证，未运行',paused:'自动发布已暂停',idle:'自动发布已就绪 · 等待运行时段',ready:config.running?`正在${config.publish_phase||'核查并发布'} · ${config.publish_elapsed_seconds||0}秒`:config.preparing?'正在自动选题与成稿':'自动执行中 · 等待下一排期'};
   $('publishing-state').textContent=labels[config.state]||'状态待核实';
   $('publishing-reason').textContent=config.reason||'按已保存排期执行，资料不足或检查失败时跳过，不补发。';
   $('publishing-account').textContent='账号：'+config.account;

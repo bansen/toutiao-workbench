@@ -7,6 +7,15 @@ from workbench.llm import LLM, build_messages
 
 
 class LLMTests(unittest.IsolatedAsyncioTestCase):
+    async def test_total_deadline_releases_model_lock_when_transport_never_finishes(self):
+        from unittest.mock import patch
+        async def handler(req):await asyncio.Event().wait()
+        llm=LLM('https://model.test/v1','SECRET-KEY','test',transport=httpx.MockTransport(handler))
+        with patch('workbench.llm.MODEL_TOTAL_TIMEOUT',.02,create=True):
+            with self.assertRaisesRegex(ValueError,'总时限'):
+                await asyncio.wait_for(llm.generate([{'body':'资料','url':'x'}],{},1),.5)
+        self.assertFalse(llm.lock.locked())
+
     async def test_rate_limit_retries_twice_then_returns_valid_draft(self):
         calls=[]
         async def handler(req):

@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from urllib.parse import urljoin, urlsplit
 
-from .browser import NeedsAttention
+from .browser import NeedsAttention, close_page
 from .parsing import canonical_url,parse_time
 from .publication_guard import digest
 from .publishing_checks import check_publish_declarations
@@ -91,7 +91,7 @@ class ToutiaoPublisher:
                 except Exception:
                     pass # Cleanup must not replace the original failure or receipt.
                 finally:
-                    await self.page.close()
+                    await close_page(self.page)
         finally:
             self.page=None
             self.snapshot=None

@@ -50,6 +50,13 @@ class NeedsAttention(Exception):
     pass
 
 
+async def close_page(page):
+    try:
+        await asyncio.wait_for(page.close(), 5)
+    except Exception:
+        pass  # A stalled close must not retain the coordinator's browser lock.
+
+
 class Browser:
     def __init__(self, profile, headless=True):
         self.profile = Path(profile)
@@ -134,7 +141,7 @@ class Browser:
                     'product':product,'kind':'official','published_at':None,'verified_at':stamp,
                     'body_collected_at':stamp,'collected_at':stamp,'body_source':actual,'links':links[:60]}
         finally:
-            await page.close()
+            await close_page(page)
 
     async def login(self):
         async with self.lock:
@@ -256,7 +263,7 @@ class Browser:
                 url=target
             return results
         finally:
-            await page.close()
+            await close_page(page)
 
     async def detail(self, url, kind='article'):
         await self.start()
@@ -281,4 +288,4 @@ class Browser:
                     'published_at':parse_time(meta),'published_raw':meta,'reads':None,'comments':None,'likes':None,
                     'body_source':final_url,'metrics_source':final_url,'body_collected_at':timestamp,'metrics_collected_at':timestamp,'collected_at':timestamp}
         finally:
-            await page.close()
+            await close_page(page)
