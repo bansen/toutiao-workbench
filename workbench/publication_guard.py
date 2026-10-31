@@ -44,7 +44,7 @@ class PublicationGuard:
         except (KeyError,ValueError,TypeError):pass
         records = self.ledger.records(account_id)
         if self.ledger._version(records) != result['history_version']:
-            return {**result, 'decision': 'review', 'reasons': ['发布历史已变化，请重新查重']}
+            return {**result, 'decision': 'review', 'retryable':True, 'reasons': ['发布历史已变化，请重新查重']}
         records = recent_history(records, self.clock())
         batches, batch, size = [], [], 0
         for record in records:
@@ -70,9 +70,9 @@ class PublicationGuard:
                 if decision != 'distinct':
                     return {**result, 'decision': 'review', 'reasons': ['事件是否重复尚不明确，须人工核实']}
             except Exception:
-                return {**result, 'decision': 'review', 'reasons': ['事件查重服务不可用，未放行发送']}
+                return {**result, 'decision': 'review', 'retryable':True, 'reasons': ['事件查重服务不可用，未放行发送']}
         if self.ledger.check_local(draft, account_id)['history_version'] != result['history_version']:
-            return {**result, 'decision': 'review', 'reasons': ['发布历史已变化，请重新查重']}
+            return {**result, 'decision': 'review', 'retryable':True, 'reasons': ['发布历史已变化，请重新查重']}
         return {**result,'approval':{'version':1,'account':account_id,'at':self.clock().isoformat(),
                     'draft_hash':draft_hash(draft),'history_version':result['history_version']}}
 

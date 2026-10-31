@@ -202,12 +202,16 @@ class MicroRuntime:
                         self._retain_history(now)
                 if self._eligible(now) and self._preparation_due(now) and not (self._prepare_task and not self._prepare_task.done()):
                     self._last_prepare = now
-                    self._prepare_task = asyncio.create_task(self.prepare())
+                    self._prepare_task = asyncio.create_task(self._prepare_round())
             except asyncio.CancelledError:
                 raise
             except Exception:
                 self.pause('自动发布运行异常，请人工检查')
             await asyncio.sleep(2)
+
+    async def _prepare_round(self):
+        try:await asyncio.wait_for(self.prepare(),300)
+        except asyncio.TimeoutError:self._log('本轮备稿达到5分钟总时限，保留已保存稿件，下轮继续，不影响定时发布')
 
     def _retain_history(self, now):
         if getattr(self.guard, 'ledger', None) is not None:
@@ -346,18 +350,21 @@ class MicroRuntime:
                     continue
                 old = {**old,'recent_titles':self._recent_titles()}
                 fixed,check = await self._qualify_ai(old,sources,(old.get('options') or {}).get('topic','AI'))
-                if not check.get('retryable'):
-                    attempts[origin] = REVIEW_POLICY
-                    self.store.set_setting('micro_review_policy_audits', attempts)
                 fixed.update(recovery_origin=origin)
                 topic = (fixed.get('options') or {}).get('topic','AI')
                 if check.get('passed') is not True:
+                    if not check.get('retryable'):
+                        attempts[origin]=REVIEW_POLICY;self.store.set_setting('micro_review_policy_audits',attempts)
                     self._save_review_draft(fixed, check.get('issues') or ['修整后仍未通过检查'],retryable=check.get('retryable',False))
                     self._log('保存稿修整未通过：'+'；'.join(check.get('issues') or [])[:300])
+                    if check.get('retryable'):return
                     continue
                 verdict = await self.guard.inspect(fixed,self._account())
                 if verdict.get('decision')!='clear':
-                    self._save_review_draft(fixed,verdict.get('reasons') or ['发布查重尚未通过'])
+                    if not verdict.get('retryable'):
+                        attempts[origin]=REVIEW_POLICY;self.store.set_setting('micro_review_policy_audits',attempts)
+                    self._save_review_draft(fixed,verdict.get('reasons') or ['发布查重尚未通过'],retryable=verdict.get('retryable',False))
+                    if verdict.get('retryable'):return
                     continue
                 if verdict.get('approval'):fixed['publication_approval']=verdict['approval']
                 history = recent_history(active,self._now())
@@ -366,6 +373,7 @@ class MicroRuntime:
                     if (await self.llm.judge_duplicate(fixed,history[offset:offset+20])).get('decision')!='distinct':
                         distinct=False;break
                 if not distinct:
+                    attempts[origin]=REVIEW_POLICY;self.store.set_setting('micro_review_policy_audits',attempts)
                     self._save_review_draft(fixed,['修整稿与队列重复或无法确定'])
                     continue
                 saved = self.store.save_generated(uuid.uuid4().hex,uuid.uuid4().hex,1,fixed)
@@ -375,6 +383,7 @@ class MicroRuntime:
                 event_key=hashlib.sha256('\n'.join(sorted(_canonical_source(s['url']) for s in saved['sources'])).encode()).hexdigest()
                 row=self.queue.add(slot,saved,topic,event_key)
                 active.append(row)
+                attempts[origin]=REVIEW_POLICY;self.store.set_setting('micro_review_policy_audits',attempts)
                 self.plans.update_slot(slot['id'],{'status':'queued','queue_id':row['id'],'draft_id':saved['id'],'topic':topic,'event_key':event_key})
                 occupied_sources.update(s.get('url') for s in saved['sources'])
                 self._log('保存稿已修整并通过检查，入队：'+saved['title']+' / '+slot['scheduled_at'])
@@ -915,7 +924,11 @@ class MicroRuntime:
                         material, _ = self.store.upsert_material(item)
                         if self.ai_tools:
                             titles = self._recent_titles()
-                            draft = await self.content.generate([material], topic, recent_titles=titles)
+                            try:draft = await self.content.generate([material], topic, recent_titles=titles)
+                            except Exception as exc:
+                                cooldown.pop(url,None);self.store.set_setting('micro_source_cooldown',cooldown)
+                                self._log('生成服务本轮暂不可用：'+type(exc).__name__+'；保留候选，下轮重试')
+                                return
                         else:
                             draft = await self.content.generate([material], topic)
                         draft['source_snapshots'] = [material]
@@ -928,6 +941,7 @@ class MicroRuntime:
                             if check.get('passed') is not True:
                                 self._save_review_draft(draft,check.get('issues') or ['审核未通过'],retryable=check.get('retryable',False))
                                 self._log('证据复核未通过，保留原问题：'+'；'.join(check.get('issues') or [])[:300])
+                                if check.get('retryable'):return
                                 continue
                         verdict = await self.guard.inspect(draft, self._account())
                         if verdict.get('decision') != 'clear':
@@ -938,10 +952,11 @@ class MicroRuntime:
                             if verdict.get('decision') == 'duplicate':
                                 self._log('跳过重复事件：' + reason_text)
                             else:
-                                if not draft.get('verify'):
+                                if not draft.get('verify') and not verdict.get('retryable'):
                                     draft['publication_review_blocked'] = True
-                                self._save_review_draft(draft, reasons)
+                                self._save_review_draft(draft, reasons,retryable=verdict.get('retryable',False))
                                 self._log('已保存待人工处理稿：' + reason_text)
+                                if verdict.get('retryable'):return
                             continue
                         if verdict.get('approval'):draft['publication_approval']=verdict['approval']
                         distinct = True

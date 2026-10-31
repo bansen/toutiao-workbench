@@ -59,6 +59,7 @@ class PublicationGuardTests(unittest.IsolatedAsyncioTestCase):
         self.guard.judge=failed
         result=await self.guard.inspect(draft('另一说法',7701979050666902080),'account')
         self.assertEqual(result['decision'],'review')
+        self.assertTrue(result['retryable'])
         self.assertNotIn('private-error',str(result))
     async def test_all_history_is_checked_in_batches(self):
         for i in range(27):

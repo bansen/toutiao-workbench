@@ -43,6 +43,41 @@ class Content:
         assert not self.browser.lock.locked()
         return {'passed':True,'issues':[]}
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_preparation_round_has_total_deadline_without_pausing_publication(self):
+        from unittest.mock import patch
+        original=asyncio.wait_for
+        cancelled=asyncio.Event()
+        async def hang():
+            try:await asyncio.Event().wait()
+            finally:cancelled.set()
+        self.runtime.prepare=hang
+        async def bounded(coro,timeout):
+            self.assertEqual(timeout,300)
+            return await original(coro,.01)
+        with patch('workbench.micro_runtime.asyncio.wait_for',new=bounded):
+            await self.runtime._prepare_round()
+        self.assertTrue(cancelled.is_set())
+        self.assertFalse(self.runtime._paused())
+        self.assertIn('5分钟总时限',self.store.setting('publishing_logs')[-1]['message'])
+
+    async def test_temporary_saved_draft_dedup_failure_can_recover_next_round(self):
+        from unittest.mock import AsyncMock
+        from workbench.ai_tools import PROFILE
+        self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify();self.runtime.ai_tools=True
+        source={'url':'https://www.workbuddy.cn/docs/dedup-retry','kind':'official','body':'具体功能正文',
+                'author':'WorkBuddy 官方文档','verified_at':self.now.isoformat()}
+        draft=self.store.save_generated('dedup-retry','dedup-retry',1,{'title':'功能','body':'正文','verify':[],
+            'sources':[source],'source_snapshots':[source],'options':{'profile':PROFILE,'topic':'AI'}})
+        self.browser.official_detail=AsyncMock(return_value=source)
+        self.runtime.content.check=AsyncMock(return_value={'passed':True,'issues':[]})
+        self.guard.inspect=AsyncMock(side_effect=[{'decision':'review','retryable':True,'reasons':['查重服务暂不可用']},
+            {'decision':'clear'}])
+        await self.runtime._recover_review_drafts()
+        self.assertNotIn(draft['id'],self.store.setting('micro_review_policy_audits',{}))
+        self.assertEqual(self.runtime.queue.items(),[])
+        await self.runtime._recover_review_drafts()
+        self.assertEqual(len(self.runtime.queue.items()),1)
+
     async def test_temporary_review_errors_are_metadata_not_factual_concerns(self):
         draft={'id':'origin','title':'标题','body':'正文','verify':['真正的事实疑点']}
         saved=self.runtime._save_review_draft(draft,['模型超时'],retryable=True)
