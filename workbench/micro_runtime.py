@@ -12,7 +12,9 @@ from .micro_plan_store import MicroPlanStore
 from .micro_queue import MicroQueue
 from .micro_schedule import TIMEZONE
 from .publication_ledger import body_hash, _canonical_source
-from .ai_tools import PROFILE, AiToolContent, OfficialResearch, news_source_issues
+from .ai_tools import PROFILE, AiToolContent, OfficialResearch, news_source_issues, REVIEW_POLICY
+from .draft_review import approve, approval_matches
+from .post_layout import normalize_tutorial_numbers, format_post
 from .tech_news import TechNewsResearch, mix_candidates
 from .content_mix import content_kind, NEWS, GUIDE
 
@@ -189,6 +191,10 @@ class MicroRuntime:
     async def _loop(self):
         while not self._closed:
             try:
+                if self.ai_tools and self._publish_soon(self._now()) and self._prepare_task and not self._prepare_task.done():
+                    self._prepare_task.cancel()
+                    await asyncio.gather(self._prepare_task,return_exceptions=True)
+                    self._log('临近已备稿排期，停止新备稿以释放浏览器和模型，优先发布')
                 await self.tick()
                 now = self._now()
                 if self._last_retention is None or now - self._last_retention >= timedelta(hours=1):
@@ -220,33 +226,109 @@ class MicroRuntime:
                 and now < _time(s['scheduled_at']) <= now+horizon]
 
     def _preparation_due(self, now):
+        if self.ai_tools and self._publish_soon(now):return False
         interval = timedelta(minutes=5) if self.ai_tools else timedelta(hours=1)
-        return bool(self._preparation_slots(now)) and (self._last_prepare is None or now-self._last_prepare>=interval)
+        needed=bool(self._preparation_slots(now))
+        if self.ai_tools and not needed:
+            ledger=getattr(self.guard,'ledger',None)
+            version=ledger._version(self._records()) if ledger else None
+            for row in self.queue.items():
+                if row['status']!='pending' or _time(row['scheduled_at'])<=now:continue
+                draft=self.store.draft(row['draft_id'])
+                facts_ok=approval_matches(draft,draft.get('source_snapshots',[]),now,REVIEW_POLICY)
+                history_ok=not hasattr(self.guard,'review_current') or self.guard.review_current(draft,self._account(),version)
+                if not facts_ok or not history_ok:
+                    needed=True
+                    break
+        return needed and (self._last_prepare is None or now-self._last_prepare>=interval)
+
+    def _publish_soon(self,now):
+        return any(r['status']=='pending' and timedelta(0)<=_time(r['scheduled_at'])-now<=timedelta(seconds=100) for r in self.queue.items())
+
+    async def _qualify_ai(self, draft, sources, topic, allow_repair=True):
+        if allow_repair and all(s.get('kind')=='official' for s in sources):
+            draft={**draft,'body':format_post(normalize_tutorial_numbers(draft['body']))}
+        async def review(candidate):
+            try:result=await self.content.check(candidate,sources,topic)
+            except Exception as exc:return candidate,{'passed':False,'issues':['证据审核服务暂不可用：'+type(exc).__name__],'retryable':True}
+            if result.get('passed') is True and candidate.get('verify'):
+                if result.get('resolved_verify')!=candidate['verify'] or not result.get('verification_resolutions'):
+                    return candidate,{'passed':False,'issues':list(candidate['verify'])}
+                candidate={**candidate,'verification_audit':{'original_verify':list(candidate['verify']),
+                    'resolutions':result['verification_resolutions']},'verify':[]}
+            return candidate,result
+        draft,check=await review(draft)
+        if check.get('passed') is not True and not check.get('retryable') and allow_repair and draft.get('repair_policy')!=REVIEW_POLICY:
+            issues=check.get('issues') or draft.get('verify') or ['事实检查未通过']
+            before_repair=draft
+            draft={**draft,'quality_repair_attempted':True,'repair_policy':REVIEW_POLICY}
+            try:draft=await self.content.repair(draft,sources,topic,issues)
+            except Exception as exc:return before_repair,{'passed':False,'retryable':True,'issues':issues+['修整服务暂不可用：'+type(exc).__name__]}
+            draft['quality_repair_attempted']=True
+            draft['repair_policy']=REVIEW_POLICY
+            draft,check=await review(draft)
+        if check.get('passed') is True:
+            draft=approve(draft,sources,self._now(),REVIEW_POLICY)
+        return draft,check
+
+    async def _certify_pending(self):
+        attempts=self.store.setting('queue_review_policy',{})
+        for row in self.queue.items():
+            if row['status']!='pending' or _time(row['scheduled_at'])<=self._now()+timedelta(minutes=2):continue
+            draft=self.store.draft(row['draft_id'])
+            try:
+                if approval_matches(draft,draft.get('source_snapshots',[]),self._now(),REVIEW_POLICY):
+                    checked,result=draft,{'passed':True}
+                else:
+                    if attempts.get(row['id'])==REVIEW_POLICY:continue
+                    sources=await self._refresh(draft)
+                    checked,result=await self._qualify_ai(draft,sources,row['topic'],allow_repair=False)
+                    if result.get('passed') is True or result.get('retryable'):
+                        attempts.pop(row['id'],None)
+                    else:attempts[row['id']]=REVIEW_POLICY
+                    self.store.set_setting('queue_review_policy',attempts)
+                if result.get('passed') is True and all(checked.get(k)==row.get(k) for k in ('title','body','verify','sources')):
+                    verdict=await self.guard.inspect(checked,self._account())
+                    if verdict.get('decision')!='clear':
+                        self._log('待发布稿历史查重尚未通过，不提前放行')
+                        continue
+                    if verdict.get('approval'):checked['publication_approval']=verdict['approval']
+                    self.store.record_review(draft['id'],checked)
+                    self._log('已提前核对待发布正文、来源及发布历史：'+row['title'])
+                else:
+                    self._log('现有待发布稿未获审核凭据：'+'；'.join(result.get('issues') or [])[:200])
+            except NeedsAttention:raise
+            except Exception as exc:self._log('待发布审核暂不可用：'+type(exc).__name__)
 
     def _content_slots(self, slots, draft):
         if not self.ai_tools:
             return slots
         kind = content_kind(draft)
-        return [s for s in slots if not s.get('content_type') or s['content_type']==kind]
+        return [s for s in slots if (not s.get('content_type') or s['content_type']==kind)
+                and (kind!=NEWS or all(not _time(src.get('published_at')) or
+                     _time(s['scheduled_at'])<=_time(src['published_at'])+timedelta(hours=24) for src in draft.get('sources',[])))]
 
     async def _recover_review_drafts(self):
         now = self._now()
-        attempts = self.store.setting('micro_review_repaired', {}) or {}
-        attempts = {key:value for key,value in attempts.items() if (_time(value) or now)>=now-timedelta(days=3)}
-        occupied_sources = {s.get('url') for row in self.queue.history()+self._records() for s in row.get('sources', [])}
+        attempts = self.store.setting('micro_review_policy_audits', {}) or {}
+        active=[r for r in self.queue.history() if r['status'] not in {'failed','skipped','cancelled'}]
+        occupied_sources = {s.get('url') for row in active+self._records() for s in row.get('sources', [])}
         candidates = []
         for draft in recent_history(self.store.drafts(), now):
             origin = draft.get('recovery_origin') or draft['id']
             notes = '；'.join(draft.get('verify') or [])
-            if ((draft.get('options') or {}).get('profile')!=PROFILE or not notes or origin in attempts
-                    or draft.get('editorial_review') or draft.get('quality_repair_attempted') or draft.get('publication_review_blocked')):
+            if ((draft.get('options') or {}).get('profile')!=PROFILE or attempts.get(origin)==REVIEW_POLICY
+                    or draft.get('publication_review_blocked')):
                 continue
             if any(v in notes for v in ('来源仅为','只是目录','本轮只读到','只依据帮助中心目录','product标记','未读取正文','事件查重','事件是否重复','与队列','发布历史查重','发布账号','历史回执')):
                 continue
             if not draft.get('sources') or any(s.get('url') in occupied_sources for s in draft['sources']):
                 continue
             candidates.append(draft)
-        candidates.sort(key=lambda d:(any(s.get('kind')!='official' for s in d['sources']),len(d.get('verify') or [])))
+        free_slots=self._preparation_slots(now)
+        candidates.sort(key=lambda d:(min((s['scheduled_at'] for s in self._content_slots(free_slots,d)),default='9999'),
+            d.get('repair_policy')!=REVIEW_POLICY,len(d.get('verify') or [])))
+        attempted_sources=set()
         for old in candidates[:8]:
             if not self._eligible(self._now()) or not self._preparation_slots(self._now()):
                 break
@@ -254,27 +336,31 @@ class MicroRuntime:
                 continue
             if not self._content_slots(self._preparation_slots(self._now()), old):
                 continue
+            urls={s.get('url') for s in old['sources']}
+            if urls & attempted_sources:continue
+            attempted_sources.update(urls)
             origin = old.get('recovery_origin') or old['id']
             try:
                 sources = await self._refresh(old)
                 if any(s.get('kind')!='official' and news_source_issues(s, self._now()) for s in sources):
                     continue
-                attempts[origin] = self._now().isoformat()
-                self.store.set_setting('micro_review_repaired', attempts)
                 old = {**old,'recent_titles':self._recent_titles()}
-                fixed = await self.content.repair(old, sources, (old.get('options') or {}).get('topic','AI'),old['verify'])
-                fixed.update(recovery_origin=origin,quality_repair_attempted=True)
+                fixed,check = await self._qualify_ai(old,sources,(old.get('options') or {}).get('topic','AI'))
+                if not check.get('retryable'):
+                    attempts[origin] = REVIEW_POLICY
+                    self.store.set_setting('micro_review_policy_audits', attempts)
+                fixed.update(recovery_origin=origin)
                 topic = (fixed.get('options') or {}).get('topic','AI')
-                check = await self.content.check(fixed, sources, topic)
                 if check.get('passed') is not True:
-                    self._save_review_draft(fixed, check.get('issues') or ['修整后仍未通过检查'])
+                    self._save_review_draft(fixed, check.get('issues') or ['修整后仍未通过检查'],retryable=check.get('retryable',False))
                     self._log('保存稿修整未通过：'+'；'.join(check.get('issues') or [])[:300])
                     continue
                 verdict = await self.guard.inspect(fixed,self._account())
                 if verdict.get('decision')!='clear':
                     self._save_review_draft(fixed,verdict.get('reasons') or ['发布查重尚未通过'])
                     continue
-                history = recent_history(self.queue.history(),self._now())
+                if verdict.get('approval'):fixed['publication_approval']=verdict['approval']
+                history = recent_history(active,self._now())
                 distinct = True
                 for offset in range(0,len(history),20):
                     if (await self.llm.judge_duplicate(fixed,history[offset:offset+20])).get('decision')!='distinct':
@@ -288,6 +374,7 @@ class MicroRuntime:
                 slot = slots[0]
                 event_key=hashlib.sha256('\n'.join(sorted(_canonical_source(s['url']) for s in saved['sources'])).encode()).hexdigest()
                 row=self.queue.add(slot,saved,topic,event_key)
+                active.append(row)
                 self.plans.update_slot(slot['id'],{'status':'queued','queue_id':row['id'],'draft_id':saved['id'],'topic':topic,'event_key':event_key})
                 occupied_sources.update(s.get('url') for s in saved['sources'])
                 self._log('保存稿已修整并通过检查，入队：'+saved['title']+' / '+slot['scheduled_at'])
@@ -370,7 +457,18 @@ class MicroRuntime:
         future = [s['scheduled_at'] for s in plan['slots'] if s['status'] in {'pending', 'queued', 'awaiting_confirmation'} and _time(s['scheduled_at']) >= now]
         ready, enabled = self._ready(), self._enabled()
         mix_rows = [r for r in rows if r['scheduled_at'].startswith(plan.get('date','!')) and r['status'] in {'submitted','published','rejected'}]
+        reviewed=[]
+        ledger=getattr(self.guard,'ledger',None)
+        version=ledger._version(self._records()) if ledger else None
+        for r in rows:
+            if r['status']!='pending' or _time(r['scheduled_at'])<now:continue
+            d=self.store.draft(r['draft_id'])
+            facts_ok=not self.ai_tools or approval_matches(d,d.get('source_snapshots',[]),now,REVIEW_POLICY)
+            history_ok=not hasattr(self.guard,'review_current') or self.guard.review_current(d,self._account(),version)
+            if facts_ok and history_ok:reviewed.append(r)
+        next_at=min(future,default=None)
         return {'enabled': enabled, 'ready': ready, 'running': self._running,
+                'ready_drafts':len(reviewed),'next_ready':any(r['scheduled_at']==next_at for r in reviewed),
                 'publish_phase':self._publish_phase,
                 'publish_elapsed_seconds':int((now-self._publish_started_at).total_seconds()) if self._running and self._publish_started_at else 0,
                 'content_mix_submitted': {kind:sum(content_kind(r)==kind for r in mix_rows) for kind in (NEWS,GUIDE)},
@@ -379,7 +477,7 @@ class MicroRuntime:
                 'paused': bool(pause.get('paused')), 'today': plan,
                 'service_active': bool(self._loop_task and not self._loop_task.done()),
                 'counts': dict(Counter(r['status'] for r in rows if (_time(r['scheduled_at']) or now).date() == now.date())),
-                'next_at': min(future, default=None), 'preparing': self._prepare_lock.locked(),
+                'next_at': next_at, 'preparing': self._prepare_lock.locked(),
                 'editorial_profile': PROFILE if self.ai_tools else 'hot-news'}
 
     def _skip(self, slot_id, row, reason):
@@ -473,7 +571,15 @@ class MicroRuntime:
             sources = await self._refresh(draft, priority=True)
             stage = '稿件事实复检'
             self._phase(stage)
-            check = await self.content.check({**row, 'source_snapshots': draft.get('source_snapshots', []), 'editorial_review':draft.get('editorial_review', []), 'recent_titles':self._recent_titles(exclude_draft_id=draft['id'])}, sources, row['topic'])
+            if self.ai_tools and approval_matches(draft,sources,self._now(),REVIEW_POLICY):
+                issues=self.content.input_issues(draft,sources) if hasattr(self.content,'input_issues') else []
+                check={'passed':not issues,'issues':issues}
+                self._log('已重新读取来源，正文和证据未变化，沿用提前完成的事实审核')
+            elif self.ai_tools:
+                checked,check=await self._qualify_ai({**draft,'recent_titles':self._recent_titles(exclude_draft_id=draft['id'])},sources,row['topic'],allow_repair=False)
+                if check.get('passed') is True:self.store.record_review(draft['id'],checked)
+            else:
+                check = await self.content.check({**row, 'source_snapshots': draft.get('source_snapshots', []), 'editorial_review':draft.get('editorial_review', []), 'recent_titles':self._recent_titles(exclude_draft_id=draft['id'])}, sources, row['topic'])
             if check.get('passed') is not True:
                 issues = [v for v in check.get('issues', []) if isinstance(v, str) and v.strip()]
                 reason = '发布前来源检查未通过：' + ('；'.join(issues) or '检查结果不可用')
@@ -509,7 +615,7 @@ class MicroRuntime:
                 stage = '提交与回执核查'
                 self._phase(stage)
                 return await self.publisher.submit(snapshot)
-            record = await self.guard.send(row, self._account(), row['body_sha256'], preflight, submit)
+            record = await self.guard.send({**row,'publication_approval':draft.get('publication_approval')}, self._account(), row['body_sha256'], preflight, submit)
             receipt = record.get('receipt', record)
             status = record.get('status', receipt.get('status', 'uncertain'))
             if status not in {'submitted', 'published', 'rejected', 'uncertain'}:
@@ -669,7 +775,7 @@ class MicroRuntime:
 
     async def reconcile(self, identity):
         async with self._tick_lock:
-            return await self._reconcile(identity)
+            return await asyncio.wait_for(self._reconcile(identity),120)
 
     async def _reconcile(self, identity):
         row = self.queue.get(identity)
@@ -693,8 +799,10 @@ class MicroRuntime:
         finally:
             await self.publisher.close()
 
-    def _save_review_draft(self, draft, reasons):
-        payload = {**draft, 'verify': list(dict.fromkeys([*(draft.get('verify') or []), *reasons]))}
+    def _save_review_draft(self, draft, reasons, *, retryable=False):
+        payload = {**draft, 'verify': list(dict.fromkeys([*(draft.get('verify') or []), *([] if retryable else reasons)]))}
+        if draft.get('recovery_origin') or draft.get('id'):payload['recovery_origin']=draft.get('recovery_origin') or draft['id']
+        if retryable:payload['review_retryable']=list(reasons)
         return self.store.save_generated(uuid.uuid4().hex, uuid.uuid4().hex, 1, payload)
 
     async def prepare(self, now=None):
@@ -705,6 +813,11 @@ class MicroRuntime:
             if not self._eligible(now):
                 return
             plan = self.plans.load(now.date()) or self.plans.get_or_create(now)
+            if self.ai_tools:
+                try:await self._certify_pending()
+                except NeedsAttention:
+                    self.pause('待发布来源或账号需要人工处理')
+                    return
             slots = self._preparation_slots(now)
             if not slots:
                 return
@@ -717,12 +830,16 @@ class MicroRuntime:
                     return
                 slots = self._preparation_slots(self._now())
                 if not slots or not self._eligible(self._now()):return
-            seen = set(self.store.setting('micro_seen_sources', []))
-            for row in self.queue.history()+self._records():
+            seen = set(self.store.setting('micro_seen_sources', [])) if not self.ai_tools or self.store.setting('source_selection_policy')==REVIEW_POLICY else set()
+            for row in [r for r in self.queue.history() if r['status'] not in {'failed','skipped','cancelled'}]+self._records():
                 seen.update(s.get('url') for s in row.get('sources', []))
+            self.store.set_setting('source_selection_policy',REVIEW_POLICY)
+            self.store.set_setting('micro_seen_sources',sorted(u for u in seen if isinstance(u,str)))
+            cooldown=self.store.setting('micro_source_cooldown',{})
+            discovered_cooldown={u for u,v in cooldown.items() if v.get('policy')==REVIEW_POLICY and self._now()-_time(v['at'])<timedelta(hours=6)}
             keywords = self.store.setting('publishing_keywords', DEFAULT_KEYWORDS) or DEFAULT_KEYWORDS
             candidates = []
-            discovered = {url for url in seen if isinstance(url,str)}
+            discovered = {url for url in seen if isinstance(url,str)} | discovered_cooldown
             self._log('开始本轮AI工具与新闻50%配额备稿：官方资料额度20，热点/商业/科技新闻候选额度10' if self.ai_tools else '开始本轮自动备稿：民生 / AI / 科技，总候选额度30')
             try:
                 if self.ai_tools:
@@ -775,8 +892,11 @@ class MicroRuntime:
                         if url in seen:
                             self._log('跳过候选：来源已处理或已有队列/发布记录')
                             continue
-                        seen.add(url)
-                        self.store.set_setting('micro_seen_sources', sorted(seen))
+                        if self.ai_tools:
+                            cooldown[url]={'policy':REVIEW_POLICY,'at':self._now().isoformat()}
+                            self.store.set_setting('micro_source_cooldown',cooldown)
+                        else:
+                            seen.add(url);self.store.set_setting('micro_seen_sources',sorted(seen))
                         item = card if kind == 'official' else await self._browser_step(self.browser.detail, url, kind)
                         for key in ('published_at', 'author', 'comments', 'likes', 'news_category'):
                             if item.get(key) in (None, ''):
@@ -799,22 +919,16 @@ class MicroRuntime:
                         else:
                             draft = await self.content.generate([material], topic)
                         draft['source_snapshots'] = [material]
-                        repaired_initial = False
-                        if self.ai_tools and draft.get('verify'):
+                        if self.ai_tools:
+                            draft=self.store.save_generated(uuid.uuid4().hex,uuid.uuid4().hex,1,draft)
+                        if self.ai_tools:
                             refreshed = await self._refresh(draft)
-                            issues = list(draft['verify'])
-                            draft['quality_repair_attempted'] = True
-                            try:
-                                draft = await self.content.repair(draft,refreshed,topic,issues)
-                                topic = (draft.get('options') or {}).get('topic',topic)
-                                check = await self.content.check(draft,refreshed,topic)
-                            except Exception:
-                                check = {'passed':False,'issues':issues}
+                            draft,check = await self._qualify_ai(draft,refreshed,topic)
+                            topic = (draft.get('options') or {}).get('topic',topic)
                             if check.get('passed') is not True:
-                                self._save_review_draft(draft,check.get('issues') or issues)
-                                self._log('初稿一次修整后仍待处理：'+'；'.join(check.get('issues') or issues)[:300])
+                                self._save_review_draft(draft,check.get('issues') or ['审核未通过'],retryable=check.get('retryable',False))
+                                self._log('证据复核未通过，保留原问题：'+'；'.join(check.get('issues') or [])[:300])
                                 continue
-                            repaired_initial = True
                         verdict = await self.guard.inspect(draft, self._account())
                         if verdict.get('decision') != 'clear':
                             reasons = verdict.get('reasons')
@@ -829,8 +943,9 @@ class MicroRuntime:
                                 self._save_review_draft(draft, reasons)
                                 self._log('已保存待人工处理稿：' + reason_text)
                             continue
+                        if verdict.get('approval'):draft['publication_approval']=verdict['approval']
                         distinct = True
-                        history = recent_history(self.queue.history(), self._now())
+                        history = recent_history([r for r in self.queue.history() if r['status'] not in {'failed','skipped','cancelled'}], self._now())
                         for offset in range(0, len(history), 20):
                             result = await self.llm.judge_duplicate(draft, history[offset:offset+20])
                             if result.get('decision') != 'distinct':
@@ -843,44 +958,42 @@ class MicroRuntime:
                                 break
                         if not distinct:
                             continue
-                        refreshed = await self._refresh(draft)
-                        check = await self.content.check(draft, refreshed, topic)
-                        if check.get('passed') is not True:
-                            issues = check.get('issues') or ['稿件质量检查未通过']
-                            if repaired_initial:
-                                self._save_review_draft(draft,issues)
-                                continue
-                            draft['quality_repair_attempted'] = True
-                            try:
-                                revised = await self.content.repair(draft, refreshed, topic, issues)
-                                revised_topic = (revised.get('options') or {}).get('topic')
-                                if revised_topic not in (PUBLISH_TOPICS if self.ai_tools else TOPICS):
-                                    raise ValueError('删改后的选题无效')
-                                draft, topic = revised, revised_topic
-                                check = await self.content.check(draft, refreshed, topic)
-                                if check.get('passed') is True:
-                                    verdict = await self.guard.inspect(draft, self._account())
-                                    if verdict.get('decision') != 'clear':
-                                        check = {'passed':False,'issues':verdict.get('reasons') or ['删改稿发布查重未通过']}
-                                    history = recent_history(self.queue.history(), self._now())
-                                    for offset in range(0, len(history), 20):
-                                        if check.get('passed') is not True:
-                                            break
-                                        duplicate = await self.llm.judge_duplicate(draft, history[offset:offset+20])
-                                        if duplicate.get('decision') != 'distinct':
-                                            check = {'passed':False,'issues':['删改稿与队列重复或无法确定']}
-                                self._log('已完成一次质量删改并重新检查：' + topic)
-                            except Exception:
-                                check = {'passed':False,'issues':issues}
-                                self._log('质量删改不可用，保留原问题待处理')
-                        if check.get('passed') is not True:
-                            issues = check.get('issues') or ['稿件质量检查未通过']
-                            if self.ai_tools:
-                                self._save_review_draft(draft,issues)
-                                self._log('未通过的稿件仅保留待处理，不占用未来排期')
-                                continue
-                            draft['verify'] = list(dict.fromkeys([*(draft.get('verify') or []), *issues]))
-                            self._log('模型QA未通过：' + '；'.join(issues)[:500])
+                        if not self.ai_tools:
+                            refreshed = await self._refresh(draft)
+                            check = await self.content.check(draft, refreshed, topic)
+                            if check.get('passed') is not True:
+                                issues = check.get('issues') or ['稿件质量检查未通过']
+                                draft['quality_repair_attempted'] = True
+                                try:
+                                    revised = await self.content.repair(draft, refreshed, topic, issues)
+                                    revised_topic = (revised.get('options') or {}).get('topic')
+                                    if revised_topic not in (PUBLISH_TOPICS if self.ai_tools else TOPICS):
+                                        raise ValueError('删改后的选题无效')
+                                    draft, topic = revised, revised_topic
+                                    check = await self.content.check(draft, refreshed, topic)
+                                    if check.get('passed') is True:
+                                        verdict = await self.guard.inspect(draft, self._account())
+                                        if verdict.get('decision') != 'clear':
+                                            check = {'passed':False,'issues':verdict.get('reasons') or ['删改稿发布查重未通过']}
+                                        history = recent_history(self.queue.history(), self._now())
+                                        for offset in range(0, len(history), 20):
+                                            if check.get('passed') is not True:
+                                                break
+                                            duplicate = await self.llm.judge_duplicate(draft, history[offset:offset+20])
+                                            if duplicate.get('decision') != 'distinct':
+                                                check = {'passed':False,'issues':['删改稿与队列重复或无法确定']}
+                                    self._log('已完成一次质量删改并重新检查：' + topic)
+                                except Exception:
+                                    check = {'passed':False,'issues':issues}
+                                    self._log('质量删改不可用，保留原问题待处理')
+                            if check.get('passed') is not True:
+                                issues = check.get('issues') or ['稿件质量检查未通过']
+                                if self.ai_tools:
+                                    self._save_review_draft(draft,issues)
+                                    self._log('未通过的稿件仅保留待处理，不占用未来排期')
+                                    continue
+                                draft['verify'] = list(dict.fromkeys([*(draft.get('verify') or []), *issues]))
+                                self._log('模型QA未通过：' + '；'.join(issues)[:500])
                         saved = self.store.save_generated(uuid.uuid4().hex, uuid.uuid4().hex, 1, draft)
                         # Model work can outlive a slot while tick() expires it.
                         # Keep the draft, then use only still-free future slots.
@@ -899,6 +1012,7 @@ class MicroRuntime:
                         event_key = hashlib.sha256('\n'.join(sorted(_canonical_source(s['url']) for s in draft['sources'])).encode()).hexdigest()
                         status = 'pending' if check.get('passed') is True else 'awaiting_confirmation'
                         row = self.queue.add(slot, saved, topic, event_key, status=status)
+                        seen.add(url);self.store.set_setting('micro_seen_sources',sorted(u for u in seen if isinstance(u,str)))
                         if status == 'awaiting_confirmation':
                             row = self.queue.update(row['id'], {'reason': '；'.join(str(v) for v in check.get('issues', ['检查未通过']))[:1000]})
                         self.plans.update_slot(slot['id'], {'status': 'queued' if status == 'pending' else status, 'queue_id': row['id'], 'draft_id': saved['id'], 'topic': topic, 'event_key': event_key})

@@ -61,6 +61,19 @@ class PublisherEditorTests(unittest.IsolatedAsyncioTestCase):
         self.editor.fill.assert_awaited_once_with('正文\n\n第二段')
 
 class PublisherDeclarationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_delayed_receipt_is_only_looked_up_again_not_submitted_again(self):
+        from unittest.mock import AsyncMock,Mock,patch
+        from workbench.toutiao_publisher import ToutiaoPublisher,ReceiptPending
+        publisher=ToutiaoPublisher(Mock(),lambda:'account')
+        publisher.page=Mock();publisher.page.goto=AsyncMock()
+        publisher.page.locator.return_value.first.wait_for=AsyncMock()
+        publisher.check_account=AsyncMock(return_value='account')
+        publisher._lookup=AsyncMock(side_effect=[ReceiptPending('尚未出现'),{'status':'submitted'}])
+        with patch('workbench.toutiao_publisher.asyncio.sleep',new=AsyncMock()):
+            self.assertEqual((await publisher._lookup_with_grace({'body':'正文'}))['status'],'submitted')
+        self.assertEqual(publisher._lookup.await_count,2)
+        self.assertEqual(publisher.page.goto.await_count,1)
+
     async def test_declarations_wait_for_delayed_checkbox_render_without_submitting(self):
         from unittest.mock import AsyncMock, Mock, patch
         from workbench.toutiao_publisher import ToutiaoPublisher

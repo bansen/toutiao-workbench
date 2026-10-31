@@ -128,6 +128,19 @@ class Store:
             db.execute('UPDATE drafts SET payload=? WHERE id=?',(self.dump(draft),identity))
         return draft
 
+    def record_review(self, identity, reviewed):
+        from .draft_review import draft_hash
+        with self.connection() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row=db.execute('SELECT payload FROM drafts WHERE id=?',(identity,)).fetchone()
+            if not row:raise KeyError('草稿不存在')
+            current=json.loads(row[0])
+            if draft_hash(current)!=draft_hash(reviewed):raise ValueError('审核期间正文快照已变化')
+            for key in ('review_approval','source_snapshots','verification_audit','publication_approval'):
+                if key in reviewed:current[key]=reviewed[key]
+            db.execute('UPDATE drafts SET payload=? WHERE id=?',(self.dump(current),identity))
+        return current
+
     def setting(self,key,default=None):
         with self.connection() as db:
             row=db.execute('SELECT payload FROM settings WHERE key=?',(key,)).fetchone()

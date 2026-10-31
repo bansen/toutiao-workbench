@@ -119,7 +119,7 @@ class Browser:
                 const copy=node.cloneNode(true);
                 copy.querySelectorAll('nav,header,footer,script,style,aside,button').forEach(e=>e.remove());
                 return {title:document.title,body:copy.innerText || copy.textContent || '',
-                    links:[...node.querySelectorAll('a[href]')].map(a=>({url:a.href,text:a.innerText}))};
+                    links:[...document.querySelectorAll('a[href]')].map(a=>({url:a.href,text:a.innerText}))};
             }''')
             body = '\n'.join(line.strip() for line in snapshot['body'].splitlines() if line.strip())
             if len(body) < 120 or any(value in body[:400].lower() for value in ('verify you are human','access denied','请完成验证','安全验证')):

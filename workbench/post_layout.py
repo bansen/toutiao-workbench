@@ -1,4 +1,4 @@
-"""Plain-text mobile typography. Whitespace-only normalization, no rewriting."""
+"""Plain-text mobile typography and explicit tutorial numbering; no factual rewriting."""
 import re
 import unicodedata
 
@@ -31,6 +31,15 @@ def format_post(body):
     if tag_lines:
         lines.append(' '.join(re.findall(r'#[^\s#]+', ' '.join(tag_lines))))
     return '\n\n'.join(lines)
+
+
+def normalize_tutorial_numbers(body):
+    lines=body.splitlines()
+    numbered=[(i,re.match(r'^(\d{1,2})(?:[.、．]\s*|[ \t]+(?=[^\n:：]{1,35}[:：])(?!万|亿|元|人|条|台|个|次|天|月|年|小时|分钟|%|％|℃|度))(\S.*)$',line.strip())) for i,line in enumerate(lines) if i>0]
+    numbered=[(i,m) for i,m in numbered if m]
+    if len(numbered)>=2 and [int(m[1]) for _,m in numbered]==list(range(1,len(numbered)+1)):
+        for i,m in numbered:lines[i]=f'{m[1]}. {m[2]}'
+    return '\n'.join(lines)
 
 
 def layout_issues(body):

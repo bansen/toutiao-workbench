@@ -43,6 +43,134 @@ class Content:
         assert not self.browser.lock.locked()
         return {'passed':True,'issues':[]}
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_temporary_review_errors_are_metadata_not_factual_concerns(self):
+        draft={'id':'origin','title':'标题','body':'正文','verify':['真正的事实疑点']}
+        saved=self.runtime._save_review_draft(draft,['模型超时'],retryable=True)
+        self.assertEqual(saved['verify'],['真正的事实疑点'])
+        self.assertEqual(saved['review_retryable'],['模型超时'])
+        self.assertEqual(saved['recovery_origin'],'origin')
+
+    async def test_repair_timeout_does_not_consume_successful_repair_opportunity(self):
+        from unittest.mock import AsyncMock
+        draft={'title':'标题','body':'正文','verify':[]}
+        self.runtime.content.check=AsyncMock(side_effect=[{'passed':False,'issues':['需要修整']},
+            {'passed':False,'issues':['需要修整']},{'passed':True,'issues':[]}])
+        self.runtime.content.repair=AsyncMock(side_effect=[TimeoutError(),{**draft,'body':'修整正文'}])
+        sources=[{'url':'https://www.workbuddy.cn/docs/feature','kind':'official','body':'资料'}]
+        pending,result=await self.runtime._qualify_ai(draft,sources,'AI')
+        self.assertTrue(result['retryable'])
+        self.assertNotIn('repair_policy',pending)
+        fixed,result=await self.runtime._qualify_ai(pending,sources,'AI')
+        self.assertTrue(result['passed'])
+        self.assertEqual(self.runtime.content.repair.await_count,2)
+
+    async def test_temporary_saved_draft_review_failure_does_not_blacklist_origin(self):
+        from unittest.mock import AsyncMock
+        from workbench.ai_tools import PROFILE
+        self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify();self.runtime.ai_tools=True
+        source={'url':'https://www.workbuddy.cn/docs/retry-feature','kind':'official','body':'有来源的具体功能',
+                'author':'WorkBuddy 官方文档','verified_at':self.now.isoformat()}
+        draft=self.store.save_generated('retry','retry',1,{'title':'功能','body':'正文','verify':[],
+            'sources':[source],'source_snapshots':[source],'options':{'profile':PROFILE,'topic':'AI'}})
+        self.browser.official_detail=AsyncMock(return_value=source)
+        self.runtime.content.check=AsyncMock(side_effect=[TimeoutError(),{'passed':True,'issues':[]}])
+        await self.runtime._recover_review_drafts()
+        self.assertNotIn(draft['id'],self.store.setting('micro_review_policy_audits',{}))
+        await self.runtime._recover_review_drafts()
+        self.assertEqual(len(self.runtime.queue.items()),1)
+
+    async def test_temporary_queued_review_failure_can_be_retried_before_slot(self):
+        from unittest.mock import AsyncMock
+        row,draft=self.enqueue();self.now-=timedelta(minutes=10)
+        self.runtime.content.check=AsyncMock(side_effect=[TimeoutError(),{'passed':True,'issues':[]}])
+        await self.runtime._certify_pending()
+        self.assertNotIn(row['id'],self.store.setting('queue_review_policy',{}))
+        await self.runtime._certify_pending()
+        self.assertEqual(self.runtime.content.check.await_count,2)
+        self.assertIn('review_approval',self.store.draft(draft['id']))
+
+    async def test_recovered_drafts_are_compared_with_same_round_new_queue(self):
+        from unittest.mock import AsyncMock
+        from workbench.ai_tools import PROFILE
+        self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify();self.runtime.ai_tools=True
+        plan=self.runtime.plans.load(self.now.date())
+        first=next(s for s in plan['slots'] if s.get('content_type')=='tool-guide')
+        self.now=datetime.fromisoformat(first['scheduled_at'])-timedelta(minutes=5)
+        for i in range(2):
+            source={'url':f'https://www.workbuddy.cn/docs/feature-{i}','kind':'official',
+                'body':'具有产品特点的官方具体功能正文','author':'WorkBuddy 官方文档','verified_at':self.now.isoformat()}
+            self.store.save_generated(str(i),str(i),1,{'title':f'功能{i}','body':f'正文{i}','verify':[],
+                'sources':[source],'source_snapshots':[source],'options':{'profile':PROFILE,'topic':'AI'}})
+        self.browser.official_detail=AsyncMock(side_effect=lambda url,*args:{'url':url,'kind':'official','body':'实际来源正文'})
+        self.runtime.content.check=AsyncMock(return_value={'passed':True,'issues':[]})
+        self.runtime.llm.judge_duplicate=AsyncMock(return_value={'decision':'duplicate'})
+        await self.runtime._recover_review_drafts()
+        self.assertEqual(len(self.runtime.queue.items()),1)
+        self.runtime.llm.judge_duplicate.assert_awaited_once()
+        self.assertEqual(len(self.runtime.llm.judge_duplicate.call_args.args[1]),1)
+
+    async def test_expired_approval_requests_preparation_even_when_slots_occupied(self):
+        from unittest.mock import patch
+        from workbench.ai_tools import REVIEW_POLICY
+        from workbench.draft_review import approve
+        row,draft=self.enqueue();self.runtime.ai_tools=True
+        approved=approve(draft,[{'url':'https://example.test','body':'证据'}],self.now-timedelta(hours=4),REVIEW_POLICY)
+        with self.store.connection() as db:
+            db.execute('UPDATE drafts SET payload=? WHERE id=?',(self.store.dump(approved),draft['id']))
+        self.now-=timedelta(minutes=10)
+        with patch.object(self.runtime,'_preparation_slots',return_value=[]):
+            self.assertTrue(self.runtime._preparation_due(self.now))
+
+    async def test_near_ready_slot_cancels_preparation_before_tick(self):
+        from unittest.mock import AsyncMock,patch
+        self.enqueue();self.runtime.ai_tools=True
+        cancelled=asyncio.Event()
+        async def preparing():
+            try:await asyncio.Event().wait()
+            finally:cancelled.set()
+        self.runtime._prepare_task=asyncio.create_task(preparing())
+        await asyncio.sleep(0)
+        async def tick():
+            self.assertTrue(cancelled.is_set())
+            self.runtime._closed=True
+        self.runtime.tick=tick
+        self.runtime._last_retention=self.now
+        self.runtime._eligible=lambda now:False
+        self.assertTrue(self.runtime._publish_soon(self.now))
+        self.assertFalse(self.runtime._preparation_due(self.now))
+        with patch('workbench.micro_runtime.asyncio.sleep',new=AsyncMock()):
+            await self.runtime._loop()
+        self.assertTrue(self.runtime._prepare_task.cancelled())
+
+    async def test_approved_unchanged_sources_do_not_repeat_model_fact_review_at_publish(self):
+        from workbench.ai_tools import PROFILE,REVIEW_POLICY
+        from workbench.draft_review import approve
+        from unittest.mock import AsyncMock
+        row,draft=self.enqueue();await self.runtime.verify();self.runtime.ai_tools=True
+        sources=await self.runtime._refresh(draft)
+        approved=approve({**draft,'options':{'profile':PROFILE}},sources,self.now,REVIEW_POLICY)
+        with self.store.connection() as db:
+            db.execute('UPDATE drafts SET payload=? WHERE id=?',(self.store.dump(approved),draft['id']))
+        self.runtime.content.check=AsyncMock(side_effect=AssertionError('不应重复进行已完成的事实审核'))
+        await self.runtime.tick()
+        self.assertEqual(self.publisher.calls,1)
+        self.runtime.content.check.assert_not_awaited()
+
+    async def test_approved_source_change_requires_new_review_and_can_block_publication(self):
+        from workbench.ai_tools import PROFILE,REVIEW_POLICY
+        from workbench.draft_review import approve
+        from unittest.mock import AsyncMock
+        row,draft=self.enqueue();await self.runtime.verify();self.runtime.ai_tools=True
+        sources=await self.runtime._refresh(draft)
+        approved=approve({**draft,'options':{'profile':PROFILE}},sources,self.now,REVIEW_POLICY)
+        with self.store.connection() as db:
+            db.execute('UPDATE drafts SET payload=? WHERE id=?',(self.store.dump(approved),draft['id']))
+        self.runtime._refresh=AsyncMock(return_value=[{**sources[0],'body':'来源已经撤回原来事实'}])
+        self.runtime.content.check=AsyncMock(return_value={'passed':False,'issues':['关键事实被撤回']})
+        await self.runtime.tick()
+        self.assertEqual(self.publisher.calls,0)
+        self.runtime.content.check.assert_awaited_once()
+
     async def test_hanging_fact_check_times_out_and_releases_scheduler(self):
         row,_=self.enqueue();await self.runtime.verify()
         self.runtime.publish_timeout=.02

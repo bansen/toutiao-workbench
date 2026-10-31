@@ -18,6 +18,50 @@ SOURCE={'url':'https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-G
 BODY=format_post(BODY)
 
 class AiToolTests(unittest.IsolatedAsyncioTestCase):
+    def test_natural_title_quantity_is_not_mistaken_for_list_count(self):
+        body=BODY.replace(BODY.splitlines()[0],'给Kimi Work一个终点，先弄清目标模式的结束条件',1)
+        self.assertNotIn('标题数字与实际有效条数不符',format_issues({'title':body.splitlines()[0],'body':body}))
+
+    def test_clear_numbered_tutorial_headers_are_normalized_without_changing_amounts(self):
+        from workbench.post_layout import normalize_tutorial_numbers
+        self.assertIn('1. 产品反馈入口：',normalize_tutorial_numbers('教程\n1 产品反馈入口：打开菜单\n2 社区答疑入口：发帖'))
+        amounts='预算\n1 万元预算：设备\n2 万元预算：软件'
+        self.assertEqual(normalize_tutorial_numbers(amounts),amounts)
+
+    async def test_forecast_is_adjudicated_with_real_quotes_not_automatically_rejected(self):
+        now=datetime.now(timezone.utc).isoformat()
+        source={'url':'https://www.toutiao.com/article/7701979050666902079/','author':'央视新闻','kind':'article',
+            'body':'中央气象台预报，明天东北部分地区预计降温4至8度。','published_at':now,'collected_at':now}
+        body='东北降温有新预报\n\n据中央气象台预报，明天东北部分地区预计降温4至8度。\n\n#天气预报 #冷空气 #东北降温'
+        draft={'title':body.splitlines()[0],'body':body,'verify':['预报尚待实测确认']}
+        service=AiToolContent(None)
+        result={'passed':True,'issues':[],'resolutions':[{'issue_index':0,'decision':'resolved','kind':'forecast_or_plan',
+            'body_quote':'明天东北部分地区预计降温4至8度','source_quote':'明天东北部分地区预计降温4至8度',
+            'source_url':source['url'],'reason':'正文只归属官方预报，没有写成实测结果'}]}
+        service.request=AsyncMock(return_value=result)
+        check=await service.check(draft,[source],'热点')
+        self.assertTrue(check['passed']);self.assertEqual(check['resolved_verify'],draft['verify'])
+        service.request=AsyncMock(return_value={'passed':True,'issues':[]})
+        self.assertFalse((await service.check(draft,[source],'热点'))['passed'])
+
+    async def test_catalog_is_for_discovery_and_never_selected_as_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store=Store(Path(tmp)/'db');store.set_setting('ai_tools_cursor',14)
+            async def read(url,product):
+                return {**SOURCE,'url':url,'body':'目录名称和篇数'*40,'links':[{'url':'https://support.claude.com/en/articles/123-feature'}]}
+            rows=await OfficialResearch(store,AsyncMock(side_effect=read)).discover(set(),limit=2)
+            self.assertEqual(rows[0][2]['url'],'https://support.claude.com/en/articles/123-feature')
+
+    async def test_external_navigation_does_not_hide_later_official_feature(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store=Store(Path(tmp)/'db');store.set_setting('ai_tools_cursor',14)
+            feature='https://support.claude.com/en/articles/123-feature'
+            async def read(url,product):
+                return {**SOURCE,'url':url,'body':'产品具体功能和入口'*40,
+                    'links':[{'url':'https://github.com/vendor/docs'}]*10+[{'url':feature}]}
+            rows=await OfficialResearch(store,AsyncMock(side_effect=read)).discover(set(),limit=2)
+            self.assertEqual(rows[0][2]['url'],feature)
+
     async def test_business_news_keeps_its_category_and_supported_source(self):
         now=datetime.now(timezone.utc).isoformat()
         source={'url':'https://www.toutiao.com/article/7701979050666902079/','title':'公司合作公告',

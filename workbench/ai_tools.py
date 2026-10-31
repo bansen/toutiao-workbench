@@ -14,7 +14,8 @@ from datetime import datetime, timezone, timedelta
 from urllib.parse import urlsplit, urlunsplit
 
 from .micro_content import MicroContent
-from .post_layout import LAYOUT_RULES, format_post, layout_issues
+from .post_layout import LAYOUT_RULES, format_post, layout_issues, normalize_tutorial_numbers
+from .draft_review import resolve_concerns
 
 PROFILE = 'ai-tools-v1'
 NEWS_AUTHORS = frozenset({'科技日报','新华社','新华网','央视新闻','人民日报','人民网','中国新闻网','中新网','界面新闻','界面快讯','财联社','经济日报','央视财经','澎湃新闻','中新经纬','证券时报'})
@@ -187,7 +188,7 @@ def format_issues(draft, news=False):
     numbered = re.findall(r'(?m)^\s*(\d+)[.、．]\s*\S', features)
     if not news and (not numbered or list(map(int, numbered)) != list(range(1, len(numbered)+1))):
         issues.append('正文需要连续编号的功能或步骤')
-    count = re.search(r'([\d一二两三四五六七八九十]+)\s*(?:个|项|种|款|大)', title)
+    count = re.search(r'([\d一二两三四五六七八九十]+)\s*(?:个|项|种|款|大)\s*(?:功能|用法|技巧|入口|方法|步骤|工具|技能|Skills?|工作流|能力|要点|区别|变化)', title,re.I)
     digits = {'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9}
     count_value = None
     if count:
@@ -207,7 +208,11 @@ def format_issues(draft, news=False):
     return issues
 
 
+REVIEW_POLICY = hashlib.sha256((EDITORIAL_RULES+NEWS_RULES+TITLE_RULES+LAYOUT_RULES+'evidence-review-v3').encode()).hexdigest()
+
+
 class AiToolContent(MicroContent):
+    review_policy = REVIEW_POLICY
     def _draft(self, result, sources, prior=None):
         if not isinstance(result, dict) or not isinstance(result.get('body'), str) or not isinstance(result.get('title'), str):
             raise ValueError('AI工具稿件格式不正确')
@@ -216,7 +221,7 @@ class AiToolContent(MicroContent):
             raise ValueError('待核实事项格式不正确')
         category = next((s.get('news_category') for s in sources if s.get('news_category')), 'tech')
         topic = {'hot':'热点', 'business':'商业', 'tech':'科技'}.get(category,'科技') if is_news(sources) else 'AI'
-        draft = {**(prior or {}), 'title': result['title'].strip(), 'body': format_post(result['body']), 'verify': verify,
+        draft = {**(prior or {}), 'title': result['title'].strip(), 'body': format_post(result['body'] if is_news(sources) else normalize_tutorial_numbers(result['body'])), 'verify': verify,
                  'model': getattr(self.llm, 'model', ''),
                  'sources': [{k: s.get(k) for k in ('id', 'title', 'url', 'author', 'kind', 'verified_at', 'published_at', 'news_category')} for s in sources],
                  'source_snapshots': sources,
@@ -242,11 +247,9 @@ class AiToolContent(MicroContent):
         revised['editorial_review'] = list(dict.fromkeys([*(draft.get('editorial_review') or []), *issues]))
         return revised
 
-    async def check(self, draft, sources, topic):
+    def input_issues(self, draft, sources):
         news = is_news(sources)
         issues = format_issues(draft, news=news)
-        if draft.get('verify'):
-            issues.extend(draft['verify'])
         if not sources:
             issues.append('缺少当前官方正文')
         for source in sources:
@@ -261,6 +264,11 @@ class AiToolContent(MicroContent):
                     raise ValueError()
             except (ValueError, TypeError):
                 issues.append('官方正文缺失或核实时间超过一小时，需重新联网读取')
+        return list(dict.fromkeys(issues))
+
+    async def check(self, draft, sources, topic):
+        news = is_news(sources)
+        issues = self.input_issues(draft,sources)
         if issues:
             return {'passed': False, 'issues': list(dict.fromkeys(issues))}
         def facts(s):
@@ -272,13 +280,23 @@ class AiToolContent(MicroContent):
             '比较初始和新读取正文，实质变化或冲突不通过。'
             '每个事实问题须指向draft.body实际存在的具体句子，指出其中哪项断言无依据或冲突；先自查是否把正文未采用的信息缺漏误当错误。不得因单纯缺少未声称的价格、名单、时间表而拒绝。'
             '标题与近期标题重复或模板连续重复不通过；不因普通改版导航、更新时间或无关段落变化拒绝。先前问题已实质删除或修正可通过，不能只清空verify。'
-            '只返回{"passed":true或false,"issues":["具体问题"]}，只有没有问题才能通过。',
-            {'draft': {k: draft.get(k) for k in ('title', 'body', 'editorial_review')},
+            '生成器的verify及editorial_review是待审查的线索，不是已经成立的错误。独立核对正文与当前来源，不继承误判。'
+            '已明确归属的官方预报只核对预报是否真实发布，不要求天气已经发生；企业披露只核对是否确有该披露和归属，不要求独立复现实验才能报道。正文声称实测、已经落地或保证效果仍须有证据。'
+            '对verify每项返回一条resolutions：{"issue_index":0,"decision":"resolved或unresolved","kind":"supported_by_source或not_claimed或forecast_or_plan或format_corrected",'
+            '"body_quote":"正文中连续逐字引用至少6字","source_url":"current_sources中的原链接","source_quote":"当前原文连续逐字引用至少6字，不用省略号或改写","reason":"具体裁决理由"}。'
+            'not_claimed须说明正文实际说了什么、并没有声称什么；format_corrected仅用于已经由实际排版或标题修正解决的问题。不得用新引文支持原文没有的断言。'
+            '只返回{"passed":true或false,"issues":["仍成立的具体问题"],"resolutions":[]}；只有完整核对正文且每项旧疑点有证据解决、没有现存问题才能通过。',
+            {'draft': {k: draft.get(k) for k in ('title', 'body', 'verify', 'editorial_review')},
              'recent_titles': draft.get('recent_titles', []),
              'initial_sources': [facts(s) for s in draft.get('source_snapshots', [])], 'current_sources': [facts(s) for s in sources]})
         valid = isinstance(result, dict) and result.get('passed') is True and result.get('issues') == []
+        resolutions=[]
+        if valid:
+            try:resolutions=resolve_concerns(draft,sources,result)
+            except ValueError as exc:return {'passed':False,'issues':[str(exc)]}
         issues = result.get('issues') if isinstance(result, dict) else None
-        return {'passed': valid, 'issues': issues if isinstance(issues, list) and all(isinstance(v, str) for v in issues) else ['模型检查结果不可用']}
+        return {'passed': valid, 'issues': issues if isinstance(issues, list) and all(isinstance(v, str) for v in issues) else ['模型检查结果不可用'],
+                'resolved_verify':list(draft.get('verify') or []) if valid else [],'verification_resolutions':resolutions}
 
 
 class OfficialResearch:
@@ -298,14 +316,24 @@ class OfficialResearch:
             try:
                 checked += 1
                 root = await self.read(root_url, name)
-                choices = [root, *({'url':u} for u in FEATURE_ENTRIES.get(name, [])), *root.get('links', [])[:8]]
+                links=[]
+                for link in root.get('links',[]):
+                    try:
+                        url=canonical_official_url(link['url'] if isinstance(link,dict) else link)
+                    except (ValueError,KeyError,TypeError):continue
+                    if urlsplit(url).netloc!=urlsplit(root_url).netloc or is_catalog_url(url):continue
+                    if url in exclude or any(v['url']==url for v in links):continue
+                    links.append({'url':url})
+                    if len(links)>=8:break
+                choices = [root, *({'url':u} for u in FEATURE_ENTRIES.get(name, [])), *links]
                 for choice in choices:
                     if choice is not root and checked >= limit:
                         break
-                    url = choice['url'] if isinstance(choice, dict) else choice
-                    url = canonical_official_url(url)
+                    try:url = canonical_official_url(choice['url'] if isinstance(choice, dict) else choice)
+                    except (ValueError,KeyError,TypeError):continue
                     if re.search(r'/llms[^/]*\.(?:txt|json)$', urlsplit(url).path, re.I):
                         continue
+                    if is_catalog_url(url):continue
                     if url in exclude:
                         continue
                     try:
@@ -326,3 +354,8 @@ class OfficialResearch:
                 continue
         self.store.set_setting('ai_tools_last_research', {'checked': checked, 'found': len(results), 'at': datetime.now(timezone.utc).isoformat()})
         return results
+
+
+def is_catalog_url(url):
+    path=urlsplit(url).path.rstrip('/').lower()
+    return path in {'','/docs','/en','/zh','/zh-hans','/zh-cn','/open/docs','/hc/zh-cn','/gemini','/zh/home','/en/home'} or '/collections/' in path

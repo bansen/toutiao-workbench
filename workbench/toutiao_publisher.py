@@ -14,6 +14,9 @@ EDITOR='.ProseMirror[contenteditable="true"]'
 CREATE='https://mp.toutiao.com/profile_v4/weitoutiao/publish'
 MANAGE='https://mp.toutiao.com/profile_v4/manage/content/all?enter_from=left_menu'
 
+class ReceiptPending(NeedsAttention):
+    pass
+
 # The site retains this cache even when an empty editor emits an input event.
 # Clear only a cache whose rendered text matches the snapshot we own.
 CLEAR_OWNED_DRAFT_JS = r"""owned => {
@@ -229,9 +232,20 @@ class ToutiaoPublisher:
         await self.page.goto(MANAGE,wait_until='domcontentloaded',timeout=45000)
         await self.page.locator('.post-item').first.wait_for(timeout=20000)
         await self.check_account()
-        receipt=await self._lookup(draft)
+        receipt=await self._lookup_with_grace(draft)
         receipt['declarations']=self.snapshot
         return receipt
+
+    async def _lookup_with_grace(self,draft):
+        for delay in (0,2,5,10):
+            if delay:
+                await asyncio.sleep(delay)
+                await self.page.goto(MANAGE,wait_until='domcontentloaded',timeout=30000)
+                await self.page.locator('.post-item').first.wait_for(timeout=15000)
+                await self.check_account()
+            try:return await self._lookup(draft)
+            except ReceiptPending:
+                if delay==10:raise
 
     async def _lookup(self,draft):
         matches=[]
@@ -251,7 +265,8 @@ class ToutiaoPublisher:
                 return copy.textContent;
             }""")
             if compact(raw)==compact(draft['body']):matches.append(row)
-        if len(matches)!=1:raise NeedsAttention('未在当前作品记录中找到唯一匹配正文，结果待核实，禁止重发')
+        if not matches:raise ReceiptPending('当前作品记录尚未出现匹配正文，只核查、不重发')
+        if len(matches)!=1:raise NeedsAttention('作品记录出现多条相同正文，结果待核实，禁止重发')
         row=matches[0]
         tags=await row.locator('.tags').inner_text()
         state=platform_status(tags)
@@ -284,7 +299,7 @@ class ToutiaoPublisher:
                     'content_id':re.search(r'/w/(\d+)',url)[1],'body_verified':True,
                     'ai_public':ai_public,'unexpected_ai_tag':ai_public!=self.expected_ai(),'unexpected_exclusive_tag':'首发' in tags,
                     'visible_today_count':today_count,'checked_at':datetime.now(TIMEZONE).isoformat()}
-        finally:await popup.close()
+        finally:await close_page(popup)
 
     async def reconcile(self,row):
         try:

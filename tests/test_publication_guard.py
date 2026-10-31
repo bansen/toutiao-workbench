@@ -15,6 +15,20 @@ def draft(body='武汉展会展示语音控制转向灯的智能骑行头盔。'
 
 
 class PublicationGuardTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unchanged_history_uses_bound_dedup_approval_but_new_history_invalidates_it(self):
+        from unittest.mock import AsyncMock
+        self.record()
+        self.guard.judge=AsyncMock(return_value={'decision':'distinct','matched_id':None,'reason':'不同事件'})
+        candidate=draft('全新的工作流事件',7701979050666902081)
+        result=await self.guard.inspect(candidate,'account')
+        approved={**candidate,'publication_approval':result['approval']}
+        self.assertEqual((await self.guard.inspect(approved,'account'))['decision'],'clear')
+        self.assertEqual(self.guard.judge.await_count,1)
+        self.ledger.record_verified(draft('第三个事件',7701979050666902082),'account',
+            {'content_id':'1880433446879242','status':'published'})
+        await self.guard.inspect(approved,'account')
+        self.assertEqual(self.guard.judge.await_count,2)
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
         self.ledger=PublicationLedger(Store(Path(self.tmp.name)/'test.db'))

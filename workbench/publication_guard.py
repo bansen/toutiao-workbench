@@ -1,13 +1,14 @@
 """Mandatory boundary for future publishers; no browser submission implementation."""
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .history_retention import recent_history
 from .browser import NeedsAttention
 from .publishing_checks import check_publish_declarations
 from .post_layout import external_link_issues
+from .draft_review import draft_hash
 
 
 def digest(body):
@@ -33,6 +34,14 @@ class PublicationGuard:
             return {**result, 'decision':'review', 'reasons':link_issues}
         if draft.get('verify'):
             return {**result, 'decision': 'review', 'reasons': ['仍有待核实事项，请先人工处理']}
+        cached=draft.get('publication_approval') or {}
+        try:
+            age=self.clock()-datetime.fromisoformat(cached['at'])
+            if (cached.get('version')==1 and cached.get('account')==account_id
+                    and cached.get('history_version')==result['history_version']
+                    and cached.get('draft_hash')==draft_hash(draft) and timedelta(0)<=age<=timedelta(hours=3)):
+                return {**result,'approval':cached}
+        except (KeyError,ValueError,TypeError):pass
         records = self.ledger.records(account_id)
         if self.ledger._version(records) != result['history_version']:
             return {**result, 'decision': 'review', 'reasons': ['发布历史已变化，请重新查重']}
@@ -64,7 +73,16 @@ class PublicationGuard:
                 return {**result, 'decision': 'review', 'reasons': ['事件查重服务不可用，未放行发送']}
         if self.ledger.check_local(draft, account_id)['history_version'] != result['history_version']:
             return {**result, 'decision': 'review', 'reasons': ['发布历史已变化，请重新查重']}
-        return result
+        return {**result,'approval':{'version':1,'account':account_id,'at':self.clock().isoformat(),
+                    'draft_hash':draft_hash(draft),'history_version':result['history_version']}}
+
+    def review_current(self,draft,account_id,history_version):
+        cached=draft.get('publication_approval') or {}
+        try:
+            return bool(cached.get('version')==1 and cached.get('account')==account_id
+                and cached.get('history_version')==history_version and cached.get('draft_hash')==draft_hash(draft)
+                and timedelta(0)<=self.clock()-datetime.fromisoformat(cached['at'])<=timedelta(hours=3))
+        except (KeyError,ValueError,TypeError):return False
 
     def check_time(self):
         now = self.clock()
