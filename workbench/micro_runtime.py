@@ -20,7 +20,7 @@ from .content_mix import content_kind, NEWS, GUIDE
 
 POSSIBLE = {'reserved', 'submitting', 'submitted', 'published', 'uncertain', 'rejected'}
 DEFAULT_KEYWORDS = {'民生': ['民生'], 'AI': ['人工智能'], '科技': ['科技']}
-PUBLISH_TOPICS = (*TOPICS, '热点', '商业')
+PUBLISH_TOPICS = (*TOPICS, '热点', '商业','社会生活')
 
 
 def _time(value):
@@ -488,7 +488,8 @@ class MicroRuntime:
             if facts_ok and history_ok:reviewed.append(r)
         next_at=min(future,default=None)
         return {'enabled': enabled, 'ready': ready, 'running': self._running,
-                'catchup_pending':sum(bool(s.get('catchup_for')) and not s.get('adjusted_for_catchup') and s['status'] in {'pending','queued','awaiting_confirmation'} for s in plan['slots']),
+                'catchup_pending':sum(bool(s.get('catchup_for')) and not s.get('quota_increase') and not s.get('adjusted_for_catchup') and s['status'] in {'pending','queued','awaiting_confirmation'} for s in plan['slots']),
+                'extra_pending':sum(bool(s.get('quota_increase')) and s['status'] in {'pending','queued','awaiting_confirmation'} for s in plan['slots']),
                 'ready_drafts':len(reviewed),'next_ready':any(r['scheduled_at']==next_at for r in reviewed),
                 'publish_phase':self._publish_phase,
                 'publish_elapsed_seconds':int((now-self._publish_started_at).total_seconds()) if self._running and self._publish_started_at else 0,
@@ -1025,13 +1026,10 @@ class MicroRuntime:
                                 self._log('模型QA未通过：' + '；'.join(issues)[:500])
                         saved = self.store.save_generated(uuid.uuid4().hex, uuid.uuid4().hex, 1, draft)
                         # Model work can outlive a slot while tick() expires it.
-                        # Keep the draft, then use only still-free future slots.
+                        # Dense catchup can also replace unprepared slot IDs.
+                        # Read the current window rather than filtering stale IDs.
                         current_now = self._now()
-                        current_plan = self.plans.load(current_now.date()) or {}
-                        free = {s['id'] for s in current_plan.get('slots', []) if s['status'] == 'pending'}
-                        occupied = {r['slot_id'] for r in self.queue.items()}
-                        slots = [s for s in slots if s['id'] in free and s['id'] not in occupied
-                                 and _time(s['scheduled_at']) > current_now]
+                        slots = self._preparation_slots(current_now)
                         matching_slots = self._content_slots(slots, saved)
                         if not matching_slots or not self._eligible(current_now):
                             self._log('草稿已保存，本轮没有可用的未来排期，不补发')

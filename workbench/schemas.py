@@ -125,4 +125,4 @@ class PublishingKeywords(StrictModel):
 
 
 class PublicationStage(PublicationConfirmation):
-    topic:Literal['民生','AI','科技','热点','商业']
+    topic:Literal['民生','AI','科技','热点','商业','社会生活']

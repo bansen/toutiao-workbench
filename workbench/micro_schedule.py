@@ -13,6 +13,8 @@ from .content_mix import assign_content_mix
 
 
 TIMEZONE = ZoneInfo('Asia/Shanghai')
+MIN_DAILY_TARGET=40
+MAX_DAILY_TARGET=45
 
 
 def add_catchup_slots(plan, now, blocked_times=(), rng=None, *, protected_ids=()):
@@ -49,9 +51,13 @@ def add_catchup_slots(plan, now, blocked_times=(), rng=None, *, protected_ids=()
         child={'id':parent['id']+':catchup','scheduled_at':at.isoformat(),'status':'pending',
                'content_type':parent.get('content_type'),'catchup_for':parent['id'],
                'catchup_root':parent.get('catchup_root',parent['id'])}
+        if parent.get('quota_increase'):child['quota_increase']=True
+        missed=not parent.get('quota_increase') and (not adjusted or parent.get('catchup_missed')
+            or (parent.get('catchup_for') and not parent.get('adjusted_for_catchup')))
+        if missed:child['catchup_missed']=True
         if adjusted:
             parent.update(status='skipped',reason='为补发调整未备稿排期')
-            child['adjusted_for_catchup']=True
+            if not missed:child['adjusted_for_catchup']=True
         parent['catchup_slot_id']=child['id']
         result['slots'].append(child)
         return child
@@ -59,16 +65,20 @@ def add_catchup_slots(plan, now, blocked_times=(), rng=None, *, protected_ids=()
         if available<=0:break
         positions=fit(occupied)
         if not positions:
-            for movable in sorted(result['slots'],key=lambda s:s['scheduled_at']):
-                stamp=_slot_time(movable)
-                if (movable['status']!='pending' or movable.get('queue_id') or movable['id'] in protected_ids or stamp<=clock
-                        or stamp in blocked_times):continue
-                remaining=[t for t in occupied if t!=stamp]
-                positions=fit(remaining,2)
-                if positions:
-                    append_child(movable,positions[1],adjusted=True)
-                    occupied=sorted([*remaining,positions[1]])
-                    break
+            movable=[s for s in sorted(result['slots'],key=lambda s:s['scheduled_at'])
+                if s['status']=='pending' and not s.get('queue_id') and s['id'] not in protected_ids
+                and _slot_time(s)>clock and _slot_time(s) not in blocked_times]
+            for size in range(1,len(movable)+1):
+                for offset in range(len(movable)-size+1):
+                    group=movable[offset:offset+size]
+                    removed={_slot_time(s) for s in group}
+                    remaining=[t for t in occupied if t not in removed]
+                    positions=fit(remaining,size+1)
+                    if positions:
+                        for original,at in zip(group,positions[1:]):append_child(original,at,adjusted=True)
+                        occupied=sorted([*remaining,*positions[1:]])
+                        break
+                if positions:break
         if not positions:break
         append_child(parent,positions[0])
         occupied=sorted([*occupied,positions[0]]);available-=1
@@ -87,20 +97,20 @@ def _slot_time(slot: dict) -> datetime:
 
 
 def generate_daily_plan(day_or_now: date | datetime, rng: Random) -> dict:
-    """Draw 24–30 slots between 08:00 and 22:00 in Asia/Shanghai.
+    """Draw 40–45 slots between 08:00 and 22:00 in Asia/Shanghai.
 
-    Each equal stratum draws within its inner 40%. The shortest stratum is
-    28 minutes, so even adjacent extreme draws are at least 16.8 minutes apart.
+    Each equal stratum draws within its inner 10%. Even at 45 slots,
+    adjacent extreme draws remain at least 16.8 minutes apart.
     Passing an explicit RNG makes the plan reproducible without global state.
     """
     now = _local_clock(day_or_now) if isinstance(day_or_now, datetime) else None
     day = now.date() if now is not None else day_or_now
-    target = rng.randint(24, 30)
+    target = rng.randint(MIN_DAILY_TARGET, MAX_DAILY_TARGET)
     start = datetime.combine(day, time(8), tzinfo=TIMEZONE)
     width = timedelta(hours=14) / target
     slots = []
     for index in range(target):
-        scheduled = start + width * (index + rng.uniform(.3, .7))
+        scheduled = start + width * (index + rng.uniform(.45, .55))
         slots.append({
             'id': f'{day.isoformat()}:{index + 1:02d}',
             'scheduled_at': scheduled.isoformat(),

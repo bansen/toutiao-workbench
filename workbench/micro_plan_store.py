@@ -4,9 +4,9 @@ import random
 import sqlite3
 import uuid
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-from .micro_schedule import expire_missed_slots, generate_daily_plan, add_catchup_slots, TIMEZONE
+from .micro_schedule import expire_missed_slots, generate_daily_plan, add_catchup_slots, TIMEZONE, MIN_DAILY_TARGET, MAX_DAILY_TARGET
 from .content_mix import assign_content_mix, content_kind
 
 
@@ -46,6 +46,23 @@ class MicroPlanStore:
                     fixed = {item['slot_id']:content_kind(item) for record in db.execute('SELECT payload FROM micro_publish_queue')
                              if (item:=json.loads(record[0]))['scheduled_at'].startswith(day)}
                 plan=assign_content_mix(plan, fixed)
+            if 24<=plan['target']<=30:
+                previous=plan['target']
+                # A partial legacy day adopts the requested lower bound; fresh
+                # full-day plans draw the complete 40–45 range.
+                plan['target']=(MIN_DAILY_TARGET if now.astimezone(TIMEZONE).hour>=8 else
+                    (rng or random.SystemRandom()).randint(MIN_DAILY_TARGET,MAX_DAILY_TARGET))
+                news=(plan['target']+1)//2-plan['content_mix']['news']
+                guides=plan['target']//2-plan['content_mix']['tool-guide']
+                for index in range(plan['target']-previous):
+                    kind='news' if news>=guides else 'tool-guide'
+                    if kind=='news':news-=1
+                    else:guides-=1
+                    plan['slots'].append({'id':day+':quota:'+str(index+1),
+                        'scheduled_at':(now.astimezone(TIMEZONE)-timedelta(microseconds=1)).isoformat(),
+                        'status':'skipped','content_type':kind,'quota_increase':True,'reason':'今日目标调整新增名额'})
+                plan['content_mix'].update(news=(plan['target']+1)//2,**{'tool-guide':plan['target']//2})
+                plan['quota_upgrade']={'from':previous,'target':plan['target'],'at':now.isoformat()}
             plan=expire_missed_slots(plan,now)
             db.execute('INSERT INTO micro_daily_plans VALUES(?,?) ON CONFLICT(day) DO UPDATE SET payload=excluded.payload',
                        (day,self.store.dump(plan)))

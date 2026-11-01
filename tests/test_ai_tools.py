@@ -18,6 +18,22 @@ SOURCE={'url':'https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-G
 BODY=format_post(BODY)
 
 class AiToolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_social_life_post_keeps_news_format_and_is_supported_by_reviewer(self):
+        from workbench.schemas import PublicationStage
+        self.assertEqual(PublicationStage(topic='社会生活',body_sha256='a'*64).topic,'社会生活')
+        now=datetime.now(timezone.utc).isoformat()
+        source={'url':'https://www.toutiao.com/article/7701979050666902079/','author':'央视新闻','kind':'article',
+            'news_category':'social','body':'甲市公布新的公交换乘优惠，适用本市公交线路。','published_at':now,'collected_at':now}
+        body='甲市公交换乘有新优惠\n\n据央视新闻报道，甲市公布新的公交换乘优惠，适用本市公交线路。\n\n#城市生活 #公交出行 #公共服务'
+        service=AiToolContent(None);service.request=AsyncMock(return_value={'title':body.splitlines()[0],'body':body,'verify':[]})
+        draft=await service.generate([source],'社会生活')
+        self.assertEqual(draft['options']['topic'],'社会生活')
+        self.assertEqual(draft['options']['news_category'],'social')
+        self.assertIn('社会生活内容覆盖',service.request.call_args.args[0])
+        service.request=AsyncMock(return_value={'passed':True,'issues':[]})
+        self.assertTrue((await service.check(draft,[source],'社会生活'))['passed'])
+        self.assertIn('热点、商业、科技或社会生活',service.request.call_args.args[0])
+
     async def test_hook_preferences_apply_to_writing_without_blocking_existing_reviewed_posts(self):
         service=AiToolContent(None)
         service.request=AsyncMock(return_value={'title':BODY.splitlines()[0],'body':BODY,'verify':[]})

@@ -42,7 +42,7 @@ class TechNewsResearch:
                         continue
                 seen.add(url)
                 category = NEWS_CATEGORIES.get(word, 'tech')
-                topic = {'hot':'热点', 'business':'商业', 'tech':'科技'}[category]
+                topic = {'hot':'热点', 'business':'商业', 'tech':'科技','social':'社会生活'}[category]
                 found.append((topic, 'article', {**card, 'url':url, 'news_category':category}))
         return found
 

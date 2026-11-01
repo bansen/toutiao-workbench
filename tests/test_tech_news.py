@@ -9,6 +9,17 @@ from workbench.tech_news import TechNewsResearch, mix_candidates
 
 
 class TechNewsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_social_life_search_preserves_category_and_topic(self):
+        from workbench.ai_tools import NEWS_KEYWORDS,NEWS_CATEGORIES
+        now=datetime.now(timezone.utc)
+        keywords=[k for k in NEWS_KEYWORDS if NEWS_CATEGORIES[k]=='social']
+        self.assertTrue(keywords)
+        with tempfile.TemporaryDirectory() as tmp:
+            store=Store(Path(tmp)/'db');store.set_setting('tech_news_cursor',NEWS_KEYWORDS.index(keywords[0]))
+            search=AsyncMock(return_value=[{'url':'https://www.toutiao.com/article/7701979050666902001/','published_at':now.isoformat()}])
+            result=await TechNewsResearch(store,search).discover(set(),now,limit=1)
+            self.assertEqual(result[0][0],'社会生活')
+            self.assertEqual(result[0][2]['news_category'],'social')
     async def test_search_is_bounded_excludes_seen_and_preserves_unknown_times_for_detail(self):
         now=datetime.now(timezone.utc)
         seen='https://www.toutiao.com/article/7701979050666902000/'

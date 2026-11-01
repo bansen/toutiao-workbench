@@ -198,14 +198,14 @@ function renderPublishing(config) {
   $('publishing-reason').textContent=config.reason||'错过的排期当天另排补发，间隔至少15分钟；22点停止，审核不通过不发布。';
   $('publishing-account').textContent='账号：'+config.account;
   const counts=config.counts||{},slots=config.today?.slots||[];
-  const stats=[['今日目标',config.today?.target||0],['已提交',config.submitted_total??((counts.submitted||0)+(counts.published||0)+(counts.rejected||0))],['已发布',config.published_total??(counts.published||0)],['待补发',config.catchup_pending||0],['已跳过',slots.filter(s=>s.status==='skipped'&&!s.catchup_slot_id).length],['待核实',counts.uncertain||0]];
+  const stats=[['今日目标',config.today?.target||0],['已提交',config.submitted_total??((counts.submitted||0)+(counts.published||0)+(counts.rejected||0))],['已发布',config.published_total??(counts.published||0)],['待补发',config.catchup_pending||0],['新增名额待发',config.extra_pending||0],['已跳过',slots.filter(s=>s.status==='skipped'&&!s.catchup_slot_id&&!s.quota_increase).length],['待核实',counts.uncertain||0]];
   if(config.editorial_profile==='ai-tools-v1'&&config.today?.content_mix){
     stats.push(['新闻计划',config.today.content_mix.news],['工具计划',config.today.content_mix['tool-guide']],['定时新闻已提交',config.content_mix_submitted?.news||0],['审核完成待发',config.ready_drafts||0]);
   }
   $('publishing-stats').innerHTML=stats.map(([label,value])=>`<span>${esc(label)}<b>${esc(value)}</b></span>`).join('');
   $('publishing-next').textContent='下一排期：'+(config.next_at?dateText(config.next_at):'今天没有未来排期')+' · '+(config.next_ready?'该时段稿件审核已完成':'该时段尚无审核完成的稿件')+' · 程序'+(config.service_active?'正在运行':'未启动');
   $('legacy-publishing-keywords').hidden=config.editorial_profile==='ai-tools-v1';
-  $('publishing-plan').innerHTML=slots.map(slot=>`<span class="publishing-slot" data-status="${esc(slot.status)}" title="${esc(slot.reason||publishingNames[slot.status]||slot.status)}">${esc(new Date(slot.scheduled_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Shanghai'}))}${slot.adjusted_for_catchup?' · 调时':slot.catchup_for?' · 补发':''}${config.editorial_profile==='ai-tools-v1'&&slot.content_type?' · '+(slot.content_type==='news'?'新闻':'工具'):''} · ${esc(slot.catchup_slot_id?(slot.reason==='为补发调整未备稿排期'?'已调整时间':'已另排补发'):publishingNames[slot.status]||slot.status)}</span>`).join('');
+  $('publishing-plan').innerHTML=slots.map(slot=>`<span class="publishing-slot" data-status="${esc(slot.status)}" title="${esc(slot.reason||publishingNames[slot.status]||slot.status)}">${esc(new Date(slot.scheduled_at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Shanghai'}))}${slot.quota_increase?(slot.catchup_for?' · 新增':' · 新增待排'):slot.adjusted_for_catchup?' · 调时':slot.catchup_for?' · 补发':''}${config.editorial_profile==='ai-tools-v1'&&slot.content_type?' · '+(slot.content_type==='news'?'新闻':'工具'):''} · ${esc(slot.catchup_slot_id?(slot.quota_increase?'新增名额已安排':slot.reason==='为补发调整未备稿排期'?'已调整时间':'已另排补发'):publishingNames[slot.status]||slot.status)}</span>`).join('');
   for(const [id,topic] of [['life','民生'],['ai','AI'],['tech','科技']]) {
     const input=$('publishing-keywords-'+id);
     if(!input.dataset.loaded){input.value=(config.keywords?.[topic]||[]).join('，');input.dataset.loaded='1';}

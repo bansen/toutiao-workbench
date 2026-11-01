@@ -21,7 +21,9 @@ PROFILE = 'ai-tools-v1'
 NEWS_AUTHORS = frozenset({'科技日报','新华社','新华网','央视新闻','人民日报','人民网','中国新闻网','中新网','界面新闻','界面快讯','财联社','经济日报','央视财经','澎湃新闻','中新经纬','证券时报'})
 NEWS_CATEGORIES = {'热点 新华社':'hot','公司 财联社':'business','人工智能 新华社':'tech',
                    '公共服务 央视新闻':'hot','商业 界面新闻':'business','机器人 科技日报':'tech',
-                   '芯片 科技日报':'tech','智能设备 央视新闻':'tech','科技新品 界面新闻':'tech'}
+                   '芯片 科技日报':'tech','智能设备 央视新闻':'tech','科技新品 界面新闻':'tech',
+                   '社会生活 人民日报':'social','就业 央视新闻':'social','消费 新华社':'social',
+                   '住房 人民日报':'social','教育 中国新闻网':'social','出行 央视新闻':'social','养老 新华社':'social'}
 NEWS_KEYWORDS = list(NEWS_CATEGORIES)
 PRODUCTS = [
     ('WorkBuddy', 'www.workbuddy.cn', '/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Skills-Market'),
@@ -124,6 +126,12 @@ HEADLINE_WRITING = '''标题创作加强：写完正文后，在内部先拟5个
 新闻摘要“某企业注册量上涨、工厂延期”→具体反差“当地注册量变成3.6倍，工厂却晚了一年”，但数字、地区、时间均须来自该篇实际资料。
 最后再问：在信息流里，读者为什么要停下来看这一条？若答案只是“了解某产品有什么功能”，就重拟标题；优化旧标题时不能只替换一两个同义词。
 不使用无依据的“99%的人不知道/必装/炸裂/赚翻/省一半/官方没告诉你”，不编造冲突、损失、动机或性能结果。最终仍只返回原有title、body、verify格式，body首行与title一致。'''
+
+SOCIAL_LIFE_WRITING='''社会生活内容覆盖就业、消费、住房、教育、出行、养老、邻里社区和公共服务等具体事件与实用变化。
+社会生活属于本任务允许发布的新闻题材，通用自检中的热点、商业、科技范围在本任务包含社会生活，按新闻自然段成稿。
+优先从普通人关心的问题和现实影响切入，使用本轮可靠媒体正文，不虚构居民故事、个人遭遇、采访或第一人称经历。
+政策信息写清来源支持的适用地区、对象和时间，不把局部措施扩展为全国规则；个案不泛化为所有人，不制造无依据的对立或恐慌。
+不泄露个人隐私，不给个人作诊断、法律定论或投资建议；保留事实归属与重要使用条件。'''
 
 
 EDITORIAL_RULES = '''你是今日头条AI工具内容编辑，面向普通职场人、内容创作者、程序员和效率工具用户。
@@ -236,7 +244,7 @@ class AiToolContent(MicroContent):
         if not isinstance(verify, list) or not all(isinstance(v, str) for v in verify):
             raise ValueError('待核实事项格式不正确')
         category = next((s.get('news_category') for s in sources if s.get('news_category')), 'tech')
-        topic = {'hot':'热点', 'business':'商业', 'tech':'科技'}.get(category,'科技') if is_news(sources) else 'AI'
+        topic = {'hot':'热点', 'business':'商业', 'tech':'科技','social':'社会生活'}.get(category,'科技') if is_news(sources) else 'AI'
         draft = {**(prior or {}), 'title': result['title'].strip(), 'body': format_post(result['body'] if is_news(sources) else normalize_tutorial_numbers(result['body'])), 'verify': verify,
                  'model': getattr(self.llm, 'model', ''),
                  'sources': [{k: s.get(k) for k in ('id', 'title', 'url', 'author', 'kind', 'verified_at', 'published_at', 'news_category')} for s in sources],
@@ -249,6 +257,7 @@ class AiToolContent(MicroContent):
 
     async def generate(self, sources, topic='AI', recent_titles=None):
         rules = (NEWS_RULES if is_news(sources) else EDITORIAL_RULES) + '\n' + LAYOUT_RULES + '\n' + TITLE_RULES + '\n' + HEADLINE_WRITING
+        if any(s.get('news_category')=='social' for s in sources):rules+='\n'+SOCIAL_LIFE_WRITING
         result = await self.request(rules, {'sources': sources, 'recent_titles': recent_titles or []})
         draft = self._draft(result, sources)
         draft['recent_titles'] = recent_titles or []
@@ -257,6 +266,7 @@ class AiToolContent(MicroContent):
 
     async def repair(self, draft, sources, topic, issues):
         rules = (NEWS_RULES if is_news(sources) else EDITORIAL_RULES) + '\n' + LAYOUT_RULES + '\n' + TITLE_RULES + '\n' + HEADLINE_WRITING
+        if any(s.get('news_category')=='social' for s in sources):rules+='\n'+SOCIAL_LIFE_WRITING
         result = await self.request(rules + '\n对同一主题作一次有证据的删改，解决issues，禁止仅清空verify；关键事实不成立就保留待核实项。',
                                     {'draft': draft, 'sources': sources, 'issues': issues, 'recent_titles': draft.get('recent_titles', [])})
         revised = self._draft(result, sources, draft)
@@ -291,7 +301,7 @@ class AiToolContent(MicroContent):
             return {k: s.get(k) for k in ('url', 'title', 'body', 'author', 'published_at')}
         rules = (NEWS_RULES if news else EDITORIAL_RULES) + '\n' + LAYOUT_RULES + '\n' + TITLE_RULES
         result = await self.request(
-            rules + ('\n现在仅检查，不创作。检查事件属于热点、商业或科技、近期事实有来源支持、保留宣称和实测的区别，旧闻没有包装成新事件。' if news else '\n现在仅检查，不创作。逐项执行上述十项自检；将产品名称换成另一个AI产品仍成立则过于通用。') +
+            rules + ('\n现在仅检查，不创作。检查事件属于热点、商业、科技或社会生活、近期事实有来源支持、保留宣称和实测的区别，旧闻没有包装成新事件。社会生活政策的地区、对象和时间须与来源一致，个案不泛化为全国结论。' if news else '\n现在仅检查，不创作。逐项执行上述十项自检；将产品名称换成另一个AI产品仍成立则过于通用。') +
             ('检查新闻中的事件、日期、型号、数字及效果断言有当前提供的来源正文支持，媒体转述保留归属，不把宣称写成独立实测。' if news else '检查所有功能、入口、价格、套餐、版本、格式及地区断言有当前官方正文支撑，真实实测不得虚构。') +
             '比较初始和新读取正文，实质变化或冲突不通过。'
             '每个事实问题须指向draft.body实际存在的具体句子，指出其中哪项断言无依据或冲突；先自查是否把正文未采用的信息缺漏误当错误。不得因单纯缺少未声称的价格、名单、时间表而拒绝。'
