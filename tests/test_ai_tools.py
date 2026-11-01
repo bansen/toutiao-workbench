@@ -18,6 +18,17 @@ SOURCE={'url':'https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-G
 BODY=format_post(BODY)
 
 class AiToolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_hook_preferences_apply_to_writing_without_blocking_existing_reviewed_posts(self):
+        service=AiToolContent(None)
+        service.request=AsyncMock(return_value={'title':BODY.splitlines()[0],'body':BODY,'verify':[]})
+        await service.generate([SOURCE],'AI')
+        writing=service.request.call_args.args[0]
+        self.assertIn('先拟5个不同切口',writing)
+        self.assertIn('正文必须兑现标题的问题',writing)
+        service.request=AsyncMock(return_value={'passed':True,'issues':[]})
+        self.assertTrue((await service.check({'title':BODY.splitlines()[0],'body':BODY,'verify':[]},[SOURCE],'AI'))['passed'])
+        self.assertNotIn('先拟5个不同切口',service.request.call_args.args[0])
+
     def test_natural_title_quantity_is_not_mistaken_for_list_count(self):
         body=BODY.replace(BODY.splitlines()[0],'给Kimi Work一个终点，先弄清目标模式的结束条件',1)
         self.assertNotIn('标题数字与实际有效条数不符',format_issues({'title':body.splitlines()[0],'body':body}))

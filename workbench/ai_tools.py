@@ -109,6 +109,22 @@ TITLE_RULES = '''标题必须在正文信息明确后提炼，选出本篇真正
 标题必须准确覆盖正文主题，不能以一个边角事实吸引点击却写成无关清单。不能虚构亲测、用户痛点、结果或功能。
 若来源只有导航目录，不能用“实用技巧/隐藏功能”等标题包装成未经证实的用法；保留实际证据限制。'''
 
+# Writing preferences are separate from factual admission rules: changing a
+# headline preference must not invalidate certified snapshots waiting to send.
+HEADLINE_WRITING = '''标题创作加强：写完正文后，在内部先拟5个不同切口，再比较读者相关性、具体程度、信息差和兑现程度，只选最有吸引力的一个。不要输出备选、评分或分析。
+前18字尽量出现读者关心的问题、关键变化或明确反差，让人知道为什么值得点开；不要只概括“某产品有某功能”。
+工具稿优先抓实际任务中的阻碍、容易忽略的操作条件或不同工作方式，带出具体产品和功能；可以提问，但不虚构人人遇到的困扰或亲测效果。
+新闻稿优先抓有依据的关键数字、与读者有关的影响或同一事件中的真实反差，不把标题写成会议/公告摘要。保留数字的统计口径、地域和时间，不把注册量偷换成销量。
+允许真实信息差与好奇心，正文必须兑现标题的问题。来源没有解释原因，就不能用“为什么/背后真相/在等什么”暗示有答案；不故意隐去主体、关键事件或费用限制来诱导点击。
+“文档没写更多细节/暂无信息”通常不是标题的主钩子，除非正文重点就是一个有实际影响且已证实的使用边界。
+对照最近标题，问句、数字反差、具体场景和自然陈述灵活变化，不把“别再……/原来……/不只是……”当成新的固定模板。数字按事实决定，不凑数。
+正向写法示例（只学习切口，不把示例事实带进其他文章）：
+功能说明“Claude项目缓存和额度管理”→读者问题“Claude额度总不够？先别反复上传同一批文件”。
+操作说明“Kimi插件中心接入Wind和天眼查”→行动门槛“让Kimi直接查Wind、天眼查，第一步不是提问”。
+新闻摘要“某企业注册量上涨、工厂延期”→具体反差“当地注册量变成3.6倍，工厂却晚了一年”，但数字、地区、时间均须来自该篇实际资料。
+最后再问：在信息流里，读者为什么要停下来看这一条？若答案只是“了解某产品有什么功能”，就重拟标题；优化旧标题时不能只替换一两个同义词。
+不使用无依据的“99%的人不知道/必装/炸裂/赚翻/省一半/官方没告诉你”，不编造冲突、损失、动机或性能结果。最终仍只返回原有title、body、verify格式，body首行与title一致。'''
+
 
 EDITORIAL_RULES = '''你是今日头条AI工具内容编辑，面向普通职场人、内容创作者、程序员和效率工具用户。
 聚焦AI Agent、Skills、工作流、AI办公、AI编程和多模态创作工具。国内产品、国内可用工具和真实办公场景优先。
@@ -232,7 +248,7 @@ class AiToolContent(MicroContent):
         return draft
 
     async def generate(self, sources, topic='AI', recent_titles=None):
-        rules = (NEWS_RULES if is_news(sources) else EDITORIAL_RULES) + '\n' + LAYOUT_RULES + '\n' + TITLE_RULES
+        rules = (NEWS_RULES if is_news(sources) else EDITORIAL_RULES) + '\n' + LAYOUT_RULES + '\n' + TITLE_RULES + '\n' + HEADLINE_WRITING
         result = await self.request(rules, {'sources': sources, 'recent_titles': recent_titles or []})
         draft = self._draft(result, sources)
         draft['recent_titles'] = recent_titles or []
@@ -240,7 +256,7 @@ class AiToolContent(MicroContent):
         return draft
 
     async def repair(self, draft, sources, topic, issues):
-        rules = (NEWS_RULES if is_news(sources) else EDITORIAL_RULES) + '\n' + LAYOUT_RULES + '\n' + TITLE_RULES
+        rules = (NEWS_RULES if is_news(sources) else EDITORIAL_RULES) + '\n' + LAYOUT_RULES + '\n' + TITLE_RULES + '\n' + HEADLINE_WRITING
         result = await self.request(rules + '\n对同一主题作一次有证据的删改，解决issues，禁止仅清空verify；关键事实不成立就保留待核实项。',
                                     {'draft': draft, 'sources': sources, 'issues': issues, 'recent_titles': draft.get('recent_titles', [])})
         revised = self._draft(result, sources, draft)
