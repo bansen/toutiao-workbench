@@ -149,7 +149,7 @@ class CreatorAnalytics:
                                 await row.locator('.wtt-text').click(timeout=3000)
                             popup=await opened.value
                             # Only the rendered public navigation URL is used as identity.
-                            await popup.wait_for_url(re.compile(r'https://www\.toutiao\.com/w/\d+/?(?:\?.*)?$'),timeout=6000)
+                            await popup.wait_for_url(re.compile(r'https://www\.toutiao\.com/w/\d+/?(?:\?.*)?$'),timeout=6000,wait_until='commit')
                             match=re.match(r'https://www\.toutiao\.com/w/(\d+)',popup.url)
                             if match:record.update(platform_id=match[1],source_url='https://www.toutiao.com/w/'+match[1]+'/')
                         except Exception:warnings.append('部分作品公开链接不可读取')
