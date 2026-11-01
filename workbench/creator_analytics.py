@@ -31,6 +31,15 @@ def normalize_row(raw,now):
         'field_sources':{'title':'作品管理 .wtt-text','published_at':'作品管理 .time','status':'作品管理 .tags','metrics':'作品管理 .stat'},
         'statistical_scope':'单篇作品界面快照；未核实累计口径'}
 
+def date_coverage(times,previous,start,ordered,now):
+    """An empty or unsorted page never proves coverage of a date window."""
+    parsed=[parse_time(value,now) for value in times]
+    if not parsed or any(value is None for value in parsed):return False,previous,False
+    values=[datetime.fromisoformat(value) for value in parsed]
+    ordered=bool(ordered and (previous is None or previous>=values[0])
+                 and all(a>=b for a,b in zip(values,values[1:])))
+    return ordered,values[-1],ordered and values[0]<start
+
 class CreatorAnalytics:
     def __init__(self,browser,account_id,data_dir,publish_busy,store=None):
         self.browser,self.account_id=browser,account_id
@@ -116,6 +125,8 @@ class CreatorAnalytics:
         target=date.fromisoformat(target_date)
         now=datetime.now(TIMEZONE)
         cutoff=now-timedelta(hours=72)
+        window_start=min(datetime.combine(target,datetime.min.time(),tzinfo=TIMEZONE),cutoff)
+        ordered=True;previous=None;coverage_stop=None
         actor=ToutiaoPublisher(self.browser,self.account_id)
         rows=[];seen=set();pages=set();complete=False;warnings=[]
         capture_id=uuid.uuid4().hex;sample_captures=0;stage='打开作品管理'
@@ -124,7 +135,7 @@ class CreatorAnalytics:
         checkpoint.touch(mode=0o600)
         def result():
             return {'rows':rows,'complete':complete and not warnings,'capabilities':capabilities,'warnings':list(dict.fromkeys(warnings)),
-                'account_checked':True,'pagination':{'pages':len(pages),'complete':complete},
+                'account_checked':True,'pagination':{'pages':len(pages),'complete':complete,'stop_reason':coverage_stop,'window_start':window_start.isoformat(),'chronological_order_verified':ordered},
                 'verified_samples':sum(all(r.get('verification',{}).values()) for r in [r for r in rows if r['published_at'][:10]==target_date][:10])}
         capabilities={k:None for k in set(LABELS.values())}
         async def acquire():
@@ -153,6 +164,9 @@ class CreatorAnalytics:
                 if signature in pages:warnings.append('分页重复，覆盖不完整');break
                 pages.add(signature)
                 release()
+                ordered,previous,boundary=date_coverage([r['time'] for r in raw],previous,window_start,ordered,now)
+                if boundary:
+                    complete=True;coverage_stop='verified_date_boundary';break
                 for index,item in enumerate(raw):
                     if not item['body']:continue
                     record=normalize_row(item,datetime.now(TIMEZONE))
@@ -227,7 +241,7 @@ class CreatorAnalytics:
                 classes=await next_button.get_attribute('class') or ''
                 active=(await actor.page.locator('.fake-pagination-item.active').inner_text()).strip()
                 if 'disabled' in classes:
-                    complete=True;break
+                    complete=True;coverage_stop='disabled_next';break
                 first=await actor.page.locator('.post-item').first.inner_text()
                 stage='切换下一页'
                 await next_button.click(timeout=3000)

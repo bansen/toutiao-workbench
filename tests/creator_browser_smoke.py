@@ -39,6 +39,15 @@ draw();
             assert result['verified_samples']==10
             assert all(r['scope']=='cumulative' and r['metrics']['reads']==0 and r['metrics']['favorites'] is None for r in result['rows'])
             assert not browser.lock.locked()
+            # An older ordered page can end the requested window even when
+            # the platform incorrectly leaves Next enabled for empty history.
+            older=(datetime.now(TIMEZONE)-timedelta(days=4)).date().isoformat()
+            html=html.replace('<div class="time">'+day+' 09:00', '<div class="time">${page===1?"'+day+'":"'+older+'"} 09:00')
+            html=html.replace("${page===2?'disabled':''}", "")
+            bounded=await CreatorAnalytics(browser,lambda:'12345678901',directory,lambda:False).collect(day)
+            assert bounded['complete'] and len(bounded['rows'])==10,bounded
+            assert bounded['pagination']['stop_reason']=='verified_date_boundary'
+            assert not browser.lock.locked()
             print('PASS: delayed pagination; visible max is not final; 12 unique public IDs; ten list/drawer matches; zero/unknown; lock released. No real platform requests.')
         finally:await browser.close()
 

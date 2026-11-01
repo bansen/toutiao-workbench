@@ -226,7 +226,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.publisher.calls+=1
             await asyncio.Event().wait()
         self.publisher.submit=hang
-        await asyncio.wait_for(self.runtime.tick(),.5)
+        # The publisher's timeout remains 20ms. The outer test watchdog also
+        # includes synchronous SQLite commits, which can exceed 500ms on disk.
+        await asyncio.wait_for(self.runtime.tick(),5)
         await self.runtime.tick()
         self.assertEqual(self.publisher.calls,1)
         self.assertEqual(self.runtime.queue.get(row['id'])['status'],'uncertain')

@@ -43,3 +43,15 @@ class MetadataTests(unittest.TestCase):
             manual={'platform_id':'1880000000000009','body':draft['body'],'content_kind':'unknown','editorial_context':None}
             collector.attach_metadata(manual)
             self.assertIsNone(manual['editorial_context'])
+
+class CoverageTests(unittest.TestCase):
+    def test_only_verified_chronological_prefix_can_end_at_retention_boundary(self):
+        from workbench.creator_analytics import date_coverage
+        now=datetime(2026,11,2,5,tzinfo=TIMEZONE)
+        start=datetime(2026,10,30,5,tzinfo=TIMEZONE)
+        ordered,previous,done=date_coverage(['11-01 21:00','10-31 09:00'],None,start,True,now)
+        self.assertTrue(ordered);self.assertFalse(done)
+        ordered,previous,done=date_coverage(['10-30 04:00','10-29 19:00'],previous,start,ordered,now)
+        self.assertTrue(done)
+        for times,prior in [(['未知'],None),([],None),(['10-29 09:00','10-30 04:00'],None),(['10-30 04:00'],datetime(2026,10,29,5,tzinfo=TIMEZONE))]:
+            self.assertFalse(date_coverage(times,prior,start,True,now)[2])

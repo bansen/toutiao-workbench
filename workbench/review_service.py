@@ -149,7 +149,10 @@ class ReviewService:
         count=record.get('report',{}).get('post_count',0);required=min(10,count)
         raw_count=result.get('verified_samples');collector_count=raw_count if type(raw_count) is int and raw_count>=0 else 0
         pagination=result.get('pagination') or {};pages=pagination.get('pages')
+        stop=pagination.get('stop_reason')
         pagination={'pages':pages if type(pages) is int and pages>=0 else None,'complete':pagination.get('complete') is True}
+        if stop in ('verified_date_boundary','disabled_next'):
+            pagination.update(stop_reason=stop,coverage_scope='target_day_and_recent_72h')
         failures=[]
         if result.get('warnings'):failures.append('collection_warnings')
         if count<1:failures.append('no_target_posts')
