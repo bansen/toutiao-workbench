@@ -1,6 +1,7 @@
 """Durable micro-post coordinator. All platform effects cross the injected guard."""
 import asyncio
 import hashlib
+import json
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta
@@ -17,6 +18,7 @@ from .draft_review import approve, approval_matches
 from .post_layout import normalize_tutorial_numbers, format_post
 from .tech_news import TechNewsResearch, mix_candidates
 from .content_mix import content_kind, NEWS, GUIDE
+from .editorial_policy import EditorialPolicy, select_candidate
 
 POSSIBLE = {'reserved', 'submitting', 'submitted', 'published', 'uncertain', 'rejected'}
 DEFAULT_KEYWORDS = {'民生': ['民生'], 'AI': ['人工智能'], '科技': ['科技']}
@@ -37,6 +39,7 @@ class MicroRuntime:
         self.guard, self.publisher = guard, publisher
         self.clock = clock or (lambda: datetime.now(TIMEZONE))
         self.plans, self.queue, self.content = MicroPlanStore(store), MicroQueue(store), MicroContent(llm)
+        self.editorial_policy = EditorialPolicy(store)
         self.ai_tools = store.setting('editorial_profile', '') == PROFILE
         if self.ai_tools:
             self.content = AiToolContent(llm)
@@ -315,13 +318,43 @@ class MicroRuntime:
             except NeedsAttention:raise
             except Exception as exc:self._log('待发布审核暂不可用：'+type(exc).__name__)
 
+    def _generation_context(self, slot):
+        """Resolve rescheduled/revised slots to the same original generation intent."""
+        root=slot
+        visited=set()
+        # Catchups and title revisions can cross days; resolve against persisted
+        # plans rather than hashing the new slot ID or its new scheduled date.
+        with self.store.connection() as db:
+            all_slots={s['id']:s for row in db.execute('SELECT payload FROM micro_daily_plans')
+                       for s in json.loads(row[0]).get('slots',[])}
+        while True:
+            if root['id'] in visited:raise ValueError('备稿继承链存在循环，禁止重新分组')
+            visited.add(root['id'])
+            parent=root.get('catchup_root') or root.get('catchup_for') or root.get('title_revision_for')
+            if not parent:break
+            if parent not in all_slots:raise ValueError('备稿原始排期缺失，禁止重新分组')
+            root=all_slots[parent]
+        stamp=_time(root.get('scheduled_at'))
+        if stamp is None:raise ValueError('备稿原始排期日期无效')
+        return self.editorial_policy.context_for_intent(root.get('content_type') or NEWS,root['id'],stamp.date().isoformat())
+
     def _content_slots(self, slots, draft):
         if not self.ai_tools:
             return slots
         kind = content_kind(draft)
-        return [s for s in slots if (not s.get('content_type') or s['content_type']==kind)
+        matching=[s for s in slots if (not s.get('content_type') or s['content_type']==kind)
                 and (kind!=NEWS or all(not _time(src.get('published_at')) or
                      _time(s['scheduled_at'])<=_time(src['published_at'])+timedelta(hours=24) for src in draft.get('sources',[])))]
+        if 'editorial_context' not in draft:return matching
+        context=draft.get('editorial_context')
+        if not isinstance(context,dict) or not context.get('intent_id'):return []
+        result=[]
+        for slot in matching:
+            try:canonical=self._generation_context(slot)
+            except ValueError:continue
+            if all(canonical.get(k)==context.get(k) for k in ('intent_id','experiment_id','arm','policy_version','content_kind')):
+                result.append(slot)
+        return result
 
     async def _recover_review_drafts(self):
         now = self._now()
@@ -361,6 +394,7 @@ class MicroRuntime:
                     continue
                 old = {**old,'recent_titles':self._recent_titles()}
                 fixed,check = await self._qualify_ai(old,sources,(old.get('options') or {}).get('topic','AI'))
+                if 'editorial_context' in old:fixed['editorial_context']=old['editorial_context']
                 fixed.update(recovery_origin=origin)
                 topic = (fixed.get('options') or {}).get('topic','AI')
                 if check.get('passed') is not True:
@@ -862,6 +896,14 @@ class MicroRuntime:
             cooldown=self.store.setting('micro_source_cooldown',{})
             discovered_cooldown={u for u,v in cooldown.items() if v.get('policy')==REVIEW_POLICY and self._now()-_time(v['at'])<timedelta(hours=6)}
             keywords = self.store.setting('publishing_keywords', DEFAULT_KEYWORDS) or DEFAULT_KEYWORDS
+            contexts = {}
+            def generation_context(slot):
+                key=(slot['id'],slot.get('content_type') or NEWS)
+                if key not in contexts:
+                    contexts[key]=self._generation_context(slot)
+                return contexts[key]
+            if self.ai_tools:
+                for slot in slots:generation_context(slot)
             candidates = []
             discovered = {url for url in seen if isinstance(url,str)} | discovered_cooldown
             self._log('开始本轮AI工具与新闻50%配额备稿：官方资料额度20，热点/商业/科技新闻候选额度10' if self.ai_tools else '开始本轮自动备稿：民生 / AI / 科技，总候选额度30')
@@ -906,7 +948,23 @@ class MicroRuntime:
                 self._log(('发现AI工具与新闻候选：' + str(len(candidates)) + ' 条，新闻将在详情页核实时效与来源') if self.ai_tools else ('发现候选：' + str(len(candidates)) + ' 条，列表时间未知的将核实详情'))
                 if not self.ai_tools:
                     candidates.sort(key=lambda v: (v[2].get('comments') or 0, v[2].get('likes') or 0, _time(v[2].get('published_at')) or datetime.min.replace(tzinfo=TIMEZONE)), reverse=True)
-                for topic, kind, card in candidates[:30]:
+                def candidate_stream():
+                    remaining=list(candidates)
+                    for _ in range(30):
+                        if not remaining:return
+                        if not self.ai_tools:
+                            yield (*remaining.pop(0),None)
+                            continue
+                        selected=None
+                        for target in slots:
+                            context=generation_context(target)
+                            available=[c for c in remaining if self._content_slots([target],{'sources':[{**c[2],'kind':c[1]}]})]
+                            selected=select_candidate(available,context)
+                            if selected is not None:break
+                        if selected is None:return
+                        remaining.remove(selected)
+                        yield (*selected,context)
+                for topic, kind, card, editorial_context in candidate_stream():
                     if not slots or not self._eligible(self._now()):
                         break
                     if not self._content_slots(slots, {'sources':[{**card,'kind':kind}]}):
@@ -939,7 +997,7 @@ class MicroRuntime:
                         material, _ = self.store.upsert_material(item)
                         if self.ai_tools:
                             titles = self._recent_titles()
-                            try:draft = await self.content.generate([material], topic, recent_titles=titles)
+                            try:draft = await self.content.generate([material], topic, recent_titles=titles, editorial_context=editorial_context)
                             except Exception as exc:
                                 cooldown.pop(url,None);self.store.set_setting('micro_source_cooldown',cooldown)
                                 self._log('生成服务本轮暂不可用：'+type(exc).__name__+'；保留候选，下轮重试')
@@ -947,6 +1005,8 @@ class MicroRuntime:
                         else:
                             draft = await self.content.generate([material], topic)
                         draft['source_snapshots'] = [material]
+                        if self.ai_tools:
+                            draft['editorial_context'] = editorial_context
                         if self.ai_tools:
                             draft=self.store.save_generated(uuid.uuid4().hex,uuid.uuid4().hex,1,draft)
                         if self.ai_tools:
@@ -1032,7 +1092,7 @@ class MicroRuntime:
                         slots = self._preparation_slots(current_now)
                         matching_slots = self._content_slots(slots, saved)
                         if not matching_slots or not self._eligible(current_now):
-                            self._log('草稿已保存，本轮没有可用的未来排期，不补发')
+                            self._log('草稿已保存，本轮没有同一创作意图的可用未来排期，等待原意图空位')
                             break
                         slot = matching_slots[0]
                         slots = [s for s in slots if s['id'] != slot['id']]

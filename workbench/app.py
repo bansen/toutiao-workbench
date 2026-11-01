@@ -4,6 +4,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
+from pydantic import BaseModel
 
 from dotenv import load_dotenv
 from fastapi import FastAPI,HTTPException,Request
@@ -23,6 +24,10 @@ from .publication_guard import PublicationGuard,digest
 from .toutiao_publisher import ToutiaoPublisher
 from .micro_runtime import MicroRuntime,DEFAULT_KEYWORDS
 from .ai_tools import activate_profile
+from .creator_analytics import CreatorAnalytics
+from .review_store import ReviewStore
+from .editorial_policy import EditorialPolicy
+from .review_service import ReviewService
 
 ROOT=Path(__file__).resolve().parent.parent
 
@@ -49,16 +54,22 @@ def create_app(data_dir=None,browser=None,llm=None,publisher=None):
         lambda:store.setting("publishing_account",{}).get("id",""),
         expected_ai=lambda:store.setting("publishing",{}).get("ai_declaration",False))
     micro=MicroRuntime(store,browser,llm,guard,publisher)
+    creator_analytics=CreatorAnalytics(browser,lambda:store.setting('publishing_account',{}).get('id',''),data_dir,
+        lambda:micro._running or micro._publish_soon(micro._now()),store=store)
+    review_store=ReviewStore(store,data_dir/'reviews')
+    review_service=ReviewService(review_store,EditorialPolicy(store),creator_analytics,lambda:store.setting('publishing_account',{}).get('id',''))
 
     @asynccontextmanager
     async def lifespan(app):
         publications.recover()
         import_verified_test()
+        await review_service.start()
         await engine.start()
         await micro.start()
         try:
             yield
         finally:
+            await review_service.close()
             await micro.close()
             await engine.close()
 
@@ -67,6 +78,54 @@ def create_app(data_dir=None,browser=None,llm=None,publisher=None):
     app.state.publications=publications
     app.state.publication_guard=guard
     app.state.micro_runtime=micro
+    app.state.creator_analytics=creator_analytics
+    app.state.review_service=review_service
+
+    class ReviewProbe(BaseModel):
+        surface:Literal['manage','overview']='manage'
+        detail:bool=False
+
+    @app.post('/api/reviews/probe')
+    async def review_probe(options:ReviewProbe):
+        try:return await creator_analytics.probe(options.surface,options.detail)
+        except NeedsAttention as exc:raise HTTPException(409,str(exc)) from None
+
+    class ReviewRun(BaseModel):
+        target_date:str|None=None
+        validation:bool=False
+    class ReviewFinish(BaseModel):
+        findings:list[str]=[]
+        suggestions:list[str]=[]
+        changes:dict|None=None
+        expected_version:int|None=None
+    class ReviewEnabled(BaseModel):
+        enabled:bool
+    class PolicyVersion(BaseModel):
+        expected_version:int
+
+    @app.get('/api/reviews/settings')
+    async def review_settings():return review_service.settings()
+    @app.put('/api/reviews/settings')
+    async def review_config(options:ReviewEnabled):return review_service.configure(options.enabled)
+    @app.post('/api/reviews/run')
+    async def review_run(options:ReviewRun):return await review_service.start_run(options.target_date,options.validation)
+    @app.post('/api/reviews/check')
+    async def review_check():return review_service.check_due()
+    @app.get('/api/reviews/{identity}')
+    async def review_status(identity:str):return review_service.status(identity)
+    @app.post('/api/reviews/{identity}/retry')
+    async def review_retry(identity:str):
+        record=review_service.status(identity)
+        review_store.retry_collection(identity)
+        return await review_service.start_run(record['date'],record['validation'])
+    @app.get('/api/reviews/{identity}/anonymous')
+    async def review_anonymous(identity:str):return review_service.anonymous(identity)
+    @app.post('/api/reviews/{identity}/finish')
+    async def review_finish(identity:str,options:ReviewFinish):return review_service.finish(identity,**options.model_dump())
+    @app.get('/api/editorial-policy')
+    async def editorial_policy():return review_service.policy.status()
+    @app.post('/api/editorial-policy/rollback')
+    async def editorial_rollback(options:PolicyVersion):return review_service.policy.rollback(options.expected_version)
 
     def import_verified_test():
         preview_path=data_dir/"publishing-test-preview.json"

@@ -16,6 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 from .micro_content import MicroContent
 from .post_layout import LAYOUT_RULES, format_post, layout_issues, normalize_tutorial_numbers
 from .draft_review import resolve_concerns
+from .editorial_policy import render_preferences
 
 PROFILE = 'ai-tools-v1'
 NEWS_AUTHORS = frozenset({'科技日报','新华社','新华网','央视新闻','人民日报','人民网','中国新闻网','中新网','界面新闻','界面快讯','财联社','经济日报','央视财经','澎湃新闻','中新经纬','证券时报'})
@@ -255,11 +256,13 @@ class AiToolContent(MicroContent):
         draft['verify'] = list(dict.fromkeys([*verify, *format_issues(draft, news=is_news(sources))]))
         return draft
 
-    async def generate(self, sources, topic='AI', recent_titles=None):
+    async def generate(self, sources, topic='AI', recent_titles=None, editorial_context=None):
         rules = (NEWS_RULES if is_news(sources) else EDITORIAL_RULES) + '\n' + LAYOUT_RULES + '\n' + TITLE_RULES + '\n' + HEADLINE_WRITING
         if any(s.get('news_category')=='social' for s in sources):rules+='\n'+SOCIAL_LIFE_WRITING
+        rules += '\n' + render_preferences(editorial_context)
         result = await self.request(rules, {'sources': sources, 'recent_titles': recent_titles or []})
         draft = self._draft(result, sources)
+        if editorial_context is not None:draft['editorial_context'] = editorial_context
         draft['recent_titles'] = recent_titles or []
         draft['editorial_review'] = []
         return draft
@@ -267,6 +270,7 @@ class AiToolContent(MicroContent):
     async def repair(self, draft, sources, topic, issues):
         rules = (NEWS_RULES if is_news(sources) else EDITORIAL_RULES) + '\n' + LAYOUT_RULES + '\n' + TITLE_RULES + '\n' + HEADLINE_WRITING
         if any(s.get('news_category')=='social' for s in sources):rules+='\n'+SOCIAL_LIFE_WRITING
+        rules += '\n' + render_preferences(draft.get('editorial_context'))
         result = await self.request(rules + '\n对同一主题作一次有证据的删改，解决issues，禁止仅清空verify；关键事实不成立就保留待核实项。',
                                     {'draft': draft, 'sources': sources, 'issues': issues, 'recent_titles': draft.get('recent_titles', [])})
         revised = self._draft(result, sources, draft)

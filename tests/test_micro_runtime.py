@@ -254,7 +254,11 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.browser.official_detail = AsyncMock(return_value=source)
         self.runtime.content.generate = AsyncMock(return_value={'title':'具体功能','body':'有依据的具体功能正文',
             'verify':[],'sources':[source],'options':{'profile':PROFILE,'topic':'AI'}})
-        with patch('workbench.micro_runtime.OfficialResearch.discover',new=AsyncMock(return_value=[('AI','official',source)])), patch('workbench.micro_runtime.TechNewsResearch.discover',new=AsyncMock(return_value=[])):
+        async def discover_with_intents(*args):
+            with self.store.connection() as db:
+                self.assertGreater(db.execute('SELECT COUNT(*) FROM editorial_intents').fetchone()[0],0)
+            return [('AI','official',source)]
+        with patch('workbench.micro_runtime.OfficialResearch.discover',new=AsyncMock(side_effect=discover_with_intents)), patch('workbench.micro_runtime.TechNewsResearch.discover',new=AsyncMock(return_value=[])):
             await self.runtime.prepare()
         rows = self.runtime.queue.items()
         self.assertEqual(len(rows),1)
@@ -262,6 +266,107 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         slot = next(s for s in plan['slots'] if s['id']==rows[0]['slot_id'])
         self.assertEqual(slot.get('content_type'),'tool-guide')
         self.assertEqual(plan['slots'][0]['status'],'pending')
+    async def test_catchup_and_title_revision_inherit_original_context_after_rollback(self):
+        from tests.test_editorial_policy import report
+        self.plan()
+        p=self.runtime.editorial_policy
+        p.propose(report(self.now.date().isoformat()),{'headline_angle':'reader_impact'},0)
+        plan=self.runtime.plans.load(self.now.date())
+        root=plan['slots'][0]
+        original=self.runtime._generation_context(root)
+        p.rollback(1)
+        catchup={**root,'id':root['id']+':catchup','catchup_for':root['id'],
+                 'catchup_root':root['id'],'scheduled_at':(self.now+timedelta(days=1)).isoformat()}
+        revision={**catchup,'id':root['id']+':revised','catchup_for':catchup['id'],
+                  'catchup_root':catchup['id'],'title_revision_for':catchup['id']}
+        final={**root,'id':root['id']+':final','title_revision_for':revision['id'],
+               'scheduled_at':(self.now+timedelta(days=1)).isoformat()}
+        plan['slots'].extend([catchup,revision,final])
+        with self.store.connection() as db:
+            db.execute('UPDATE micro_daily_plans SET payload=? WHERE day=?',(self.store.dump(plan),self.now.date().isoformat()))
+        for slot in (catchup,revision,final):
+            self.assertEqual(self.runtime._generation_context(slot),original)
+
+    async def test_catchup_inherits_original_context_after_promotion(self):
+        from tests.test_editorial_policy import report
+        self.plan();p=self.runtime.editorial_policy
+        p.propose(report(self.now.date().isoformat()),{'headline_angle':'reader_impact'},0)
+        root=self.runtime.plans.load(self.now.date())['slots'][0]
+        original=self.runtime._generation_context(root)
+        for offset in (1,2):
+            r=report((self.now+timedelta(days=offset)).date().isoformat())
+            for cohort in r['cohorts']:cohort['experiment_id']=p.status()['active']['id']
+            p.evaluate(r)
+        self.assertIsNone(p.status()['active'])
+        self.assertEqual(p.status()['last_action'],'promoted')
+        child={**root,'id':root['id']+':catchup','catchup_root':root['id'],
+               'scheduled_at':(self.now+timedelta(days=1)).isoformat()}
+        self.assertEqual(self.runtime._generation_context(child),original)
+
+    async def test_missing_or_cyclic_intent_ancestry_does_not_redraw(self):
+        self.plan();plan=self.runtime.plans.load(self.now.date());root=plan['slots'][0]
+        child={**root,'id':'child','catchup_for':'missing'}
+        with self.assertRaises(ValueError):self.runtime._generation_context(child)
+        cycle={**root,'catchup_for':root['id']}
+        with self.store.connection() as db:
+            plan['slots'][0]=cycle
+            db.execute('UPDATE micro_daily_plans SET payload=? WHERE day=?',(self.store.dump(plan),self.now.date().isoformat()))
+        with self.assertRaises(ValueError):self.runtime._generation_context(cycle)
+
+    async def test_paid_ai_draft_waits_for_own_intent_when_generation_outlives_slot(self):
+        from unittest.mock import AsyncMock,patch
+        from tests.test_editorial_policy import report
+        from workbench.ai_tools import PROFILE
+        first=self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify()
+        self.runtime.ai_tools=True
+        plan=self.runtime.plans.load(self.now.date())
+        first.update(content_type='tool-guide')
+        for s in plan['slots']:
+            if s['id']==first['id']:s['content_type']='tool-guide'
+        self.runtime.editorial_policy.propose(report(self.now.date().isoformat()),{'headline_angle':'reader_impact'},0)
+        original=self.runtime._generation_context(first)
+        other=next(s for s in plan['slots'] if s['id']!=first['id'] and s['content_type']=='tool-guide'
+                   and self.runtime._generation_context(s)['arm']!=original['arm'])
+        with self.store.connection() as db:
+            db.execute('UPDATE micro_daily_plans SET payload=? WHERE day=?',(self.store.dump(plan),self.now.date().isoformat()))
+        source={'url':'https://developers.openai.com/codex/skills/','content_id':'official:slow','kind':'official',
+                'title':'Skills','author':'Codex 官方文档','body':'当前官方功能正文'*30,'published_at':None,'verified_at':self.now.isoformat()}
+        self.browser.official_detail=AsyncMock(return_value=source)
+        expired=False
+        async def generate(*args,**kwargs):
+            nonlocal expired
+            expired=True
+            self.now=datetime.fromisoformat(first['scheduled_at'])+timedelta(minutes=2)
+            return {'title':'付费完成稿','body':'技能正文','verify':[],'sources':[source],
+                    'options':{'profile':PROFILE,'topic':'AI'}}
+        self.runtime.content.generate=AsyncMock(side_effect=generate)
+        with patch.object(self.runtime,'_preparation_slots',side_effect=lambda now:[other] if expired else [first,other]), \
+             patch('workbench.micro_runtime.OfficialResearch.discover',new=AsyncMock(return_value=[('AI','official',source)])), \
+             patch('workbench.micro_runtime.TechNewsResearch.discover',new=AsyncMock(return_value=[])):
+            await self.runtime.prepare()
+        self.assertEqual(self.runtime.queue.items(),[])
+        paid=next(d for d in self.store.drafts() if d['title']=='付费完成稿')
+        self.assertEqual(paid['editorial_context'],original)
+        self.assertEqual(self.runtime._content_slots([other],paid),[])
+        child={**first,'id':first['id']+':catchup','catchup_root':first['id'],
+               'scheduled_at':other['scheduled_at']}
+        self.assertEqual(self.runtime._content_slots([child,other],paid),[child])
+        with patch.object(self.runtime,'_preparation_slots',return_value=[other]), \
+             patch.object(self.runtime,'_qualify_ai',new=AsyncMock()) as qualify:
+            await self.runtime._recover_review_drafts()
+            qualify.assert_not_awaited()
+        self.assertEqual(self.runtime.queue.items(),[])
+        plan['slots'].append(child)
+        with self.store.connection() as db:
+            db.execute('UPDATE micro_daily_plans SET payload=? WHERE day=?',(self.store.dump(plan),self.now.date().isoformat()))
+        with patch.object(self.runtime,'_preparation_slots',return_value=[child]):
+            await self.runtime._recover_review_drafts()
+        rows=self.runtime.queue.items()
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]['slot_id'],child['id'])
+        self.assertEqual(self.store.draft(rows[0]['draft_id'])['editorial_context'],original)
+        self.runtime.content.generate.assert_awaited_once()
+
     async def asyncSetUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.store=Store(Path(self.tmp.name)/'db'); self.store.set_setting('publishing_account',{'id':'account'})
@@ -377,6 +482,10 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.runtime.queue.items()[0]['topic'],'AI')
         self.runtime.content.generate.assert_awaited_once()
         self.assertIn('recent_titles',self.runtime.content.generate.call_args.kwargs)
+        context=self.runtime.content.generate.call_args.kwargs['editorial_context']
+        saved=self.store.draft(self.runtime.queue.items()[0]['draft_id'])
+        self.assertEqual(saved['editorial_context'],context)
+        self.assertEqual(context['content_kind'],'tool-guide')
     async def test_ai_profile_can_queue_technology_news_with_detail_source_checks(self):
         from unittest.mock import AsyncMock, patch
         from workbench.ai_tools import PROFILE
