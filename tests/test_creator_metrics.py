@@ -17,3 +17,29 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(m['shares'],0)
         self.assertIsNone(m['follows'])
         self.assertEqual(m['revenue'],.12)
+
+class MetadataTests(unittest.TestCase):
+    def test_experiment_binding_uses_account_scoped_receipt_not_rendered_body(self):
+        import tempfile
+        from pathlib import Path
+        from workbench.store import Store
+        from workbench.creator_analytics import CreatorAnalytics
+        from workbench.publication_ledger import PublicationLedger
+        with tempfile.TemporaryDirectory() as directory:
+            store=Store(Path(directory)/'data.db')
+            draft=store.save_generated('t','s',1,{'title':'标题','body':'标题\n\n正文','sources':[{'url':'https://www.toutiao.com/w/1880000000000000/'}],
+                'editorial_context':{'experiment_id':'experiment','arm':'trial','content_kind':'tool-guide','intent_id':'original'}})
+            ledger=PublicationLedger(store)
+            ledger.record_verified({**draft,'draft_id':draft['id']},'account',{'status':'published','content_id':'1880000000000001'})
+            collector=CreatorAnalytics(None,lambda:'account',directory,lambda:False,store=store)
+            row={'platform_id':'1880000000000001','body':'标题正文','content_kind':'unknown','editorial_context':None}
+            collector.attach_metadata(row)
+            self.assertEqual(row['editorial_context'],draft['editorial_context'])
+            self.assertEqual(row['content_kind'],'tool-guide')
+            other=CreatorAnalytics(None,lambda:'other-account',directory,lambda:False,store=store)
+            untouched={'platform_id':'1880000000000001','body':'标题正文','content_kind':'unknown','editorial_context':None}
+            other.attach_metadata(untouched)
+            self.assertIsNone(untouched['editorial_context'])
+            manual={'platform_id':'1880000000000009','body':draft['body'],'content_kind':'unknown','editorial_context':None}
+            collector.attach_metadata(manual)
+            self.assertIsNone(manual['editorial_context'])

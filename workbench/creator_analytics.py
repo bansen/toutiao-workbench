@@ -38,6 +38,28 @@ class CreatorAnalytics:
         self.publish_busy=publish_busy
         self.store=store
 
+    def attach_metadata(self,record):
+        """Bind experiments only through an account-scoped publication receipt.
+
+        Creator DOM can collapse line breaks. Text similarity is neither stable
+        identity nor proof that a manual post belongs to an experiment.
+        """
+        if not self.store or not record.get('platform_id'):return
+        with self.store.connection() as db:
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='publication_history'").fetchone():return
+            published=[json.loads(r[0]) for r in db.execute('SELECT payload FROM publication_history WHERE account_id=?',(self.account_id(),))]
+        matches=[r for r in published if str((r.get('receipt') or {}).get('content_id',''))==record['platform_id']]
+        if len(matches)!=1:return
+        snapshot=matches[0];draft=snapshot
+        if snapshot.get('draft_id'):
+            try:draft=self.store.draft(snapshot['draft_id'])
+            except KeyError:return
+        context=draft.get('editorial_context')
+        record['editorial_context']=context
+        record['content_kind']=(context or {}).get('content_kind') or ('tool-guide' if draft.get('sources') and all(s.get('kind')=='official' for s in draft['sources']) else 'news')
+        record['subtopic']=draft.get('topic')
+        record.setdefault('field_sources',{})['editorial_context']='当前账号发布回执 → 原始草稿'
+
     async def probe(self,surface='manage',detail=False):
         if not self.account_id():raise NeedsAttention('请先绑定头条账号')
         if self.publish_busy():return {'state':'yielded','reason':'发布优先，稍后重试'}
@@ -196,14 +218,7 @@ class CreatorAnalytics:
                     finally:release()
                     if not record['platform_id']:warnings.append('作品ID缺失');continue
                     if record['platform_id'] in seen:continue
-                    if self.store:
-                        from .toutiao_publisher import rendered_text
-                        matches=[d for d in self.store.drafts() if rendered_text(d.get('body',''))==rendered_text(record['body'])]
-                        if len(matches)==1:
-                            draft=matches[0];context=draft.get('editorial_context')
-                            record['editorial_context']=context
-                            record['content_kind']=(context or {}).get('content_kind') or ('tool-guide' if all(s.get('kind')=='official' for s in draft.get('sources',[])) and draft.get('sources') else 'news')
-                            record['subtopic']=draft.get('topic')
+                    self.attach_metadata(record)
                     seen.add(record['platform_id']);rows.append(record)
                     checkpoint.write_text(json.dumps(rows,ensure_ascii=False))
                 await acquire()
