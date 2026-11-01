@@ -163,7 +163,8 @@ class MicroRuntime:
                 self.plans.update_slot(row['slot_id'], {'status': 'failed' if row['status'] == 'failed' else 'skipped',
                                                        'reason': row.get('reason', '队列稿件已停止发布')})
             elif row['status'] in {'pending', 'awaiting_confirmation'} and _time(row['scheduled_at']) < now:
-                self._skip(row['slot_id'], row, '重启后不补发错过排期')
+                self._skip(row['slot_id'], row, '重启后错过排期，等待另排补发')
+        self._schedule_catchups(now)
         self._retain_history(now)
         self._last_tick = now
         self._loop_task = asyncio.create_task(self._loop())
@@ -226,8 +227,18 @@ class MicroRuntime:
         plan = self.plans.load(now.date()) or {}
         occupied = {r['slot_id'] for r in self.queue.items()}
         horizon = timedelta(hours=2 if self.ai_tools else 1)
-        return [s for s in plan.get('slots', []) if s['status']=='pending' and s['id'] not in occupied
-                and now < _time(s['scheduled_at']) <= now+horizon]
+        return sorted([s for s in plan.get('slots', []) if s['status']=='pending' and s['id'] not in occupied
+                and now < _time(s['scheduled_at']) <= now+horizon],key=lambda s:s['scheduled_at'])
+
+    def _schedule_catchups(self,now):
+        if not self._eligible(now):return
+        before=self.plans.load(now.date())
+        if not before:return
+        blocked=[stamp for r in self._records() if r.get('status') in POSSIBLE
+            and (stamp:=(_time(r.get('updated_at')) or _time(r.get('created_at'))))]
+        after=self.plans.schedule_catchups(now,blocked)
+        added=[s for s in after['slots'] if s['id'] not in {v['id'] for v in before['slots']}]
+        for slot in added:self._log('错过排期已另排补发：'+slot['scheduled_at']+'，重新备稿审核')
 
     def _preparation_due(self, now):
         if self.ai_tools and self._publish_soon(now):return False
@@ -477,6 +488,7 @@ class MicroRuntime:
             if facts_ok and history_ok:reviewed.append(r)
         next_at=min(future,default=None)
         return {'enabled': enabled, 'ready': ready, 'running': self._running,
+                'catchup_pending':sum(bool(s.get('catchup_for')) and not s.get('adjusted_for_catchup') and s['status'] in {'pending','queued','awaiting_confirmation'} for s in plan['slots']),
                 'ready_drafts':len(reviewed),'next_ready':any(r['scheduled_at']==next_at for r in reviewed),
                 'publish_phase':self._publish_phase,
                 'publish_elapsed_seconds':int((now-self._publish_started_at).total_seconds()) if self._running and self._publish_started_at else 0,
@@ -523,6 +535,7 @@ class MicroRuntime:
 
     async def tick(self, now=None):
         async with self._tick_lock:
+            requested_now=now
             now = self._now(now)
             plan = self.plans.load(now.date())
             if plan is None:
@@ -541,7 +554,7 @@ class MicroRuntime:
                     continue
                 row = rows.get(slot['id'])
                 if gap or now - due > timedelta(seconds=60):
-                    self._skip(slot['id'], row, '错过排期，不补发')
+                    self._skip(slot['id'], row, '错过排期，等待另排补发')
                     continue
                 if not self._eligible(now):
                     continue
@@ -558,6 +571,7 @@ class MicroRuntime:
                     await asyncio.wait_for(self._publish(slot, row), self.publish_timeout)
                 except asyncio.TimeoutError:
                     self._log('发布任务总超时，已停止等待；提交前失败不重跑，可能已提交则核查回执')
+            self._schedule_catchups(self._now(requested_now))
 
     async def _publish(self, slot, row):
         self.browser.publishing_idle.clear()

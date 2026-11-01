@@ -347,10 +347,15 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.store.edit_draft(draft['id'],'标题','改文',[])
         await self.runtime.tick()
         self.assertEqual(self.runtime.queue.get(row['id'])['status'],'cancelled'); self.assertEqual(self.publisher.calls,0)
-    async def test_missed_slot_is_skipped_without_catchup(self):
+    async def test_missed_slot_gets_new_catchup_without_reusing_old_queue(self):
         row,_=self.enqueue(); await self.runtime.verify(); self.now+=timedelta(seconds=61)
         await self.runtime.tick()
         self.assertEqual(self.runtime.queue.get(row['id'])['status'],'skipped'); self.assertEqual(self.publisher.calls,0)
+        plan=self.runtime.plans.load(self.now.date())
+        children=[s for s in plan['slots'] if s.get('catchup_for')==row['slot_id']]
+        self.assertEqual(len(children),1)
+        self.assertGreater(datetime.fromisoformat(children[0]['scheduled_at']),self.now)
+        self.assertNotIn('queue_id',children[0])
     async def test_due_without_qualified_data_skips(self):
         self.plan(); await self.runtime.verify(); await self.runtime.tick()
         self.assertEqual(self.runtime.plans.load(self.now.date())['slots'][0]['status'],'skipped')

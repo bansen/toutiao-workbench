@@ -12,6 +12,21 @@ TZ=ZoneInfo('Asia/Shanghai')
 
 
 class DailyPlanStoreTests(unittest.TestCase):
+    def test_catchup_is_atomic_and_persists_without_redrawing_originals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'db';plans=MicroPlanStore(Store(path))
+            morning=datetime(2026,11,1,7,tzinfo=TZ)
+            original=plans.get_or_create(morning,random.Random(4))
+            now=datetime(2026,11,1,10,tzinfo=TZ)
+            plans.get_or_create(now)
+            updated=plans.schedule_catchups(now)
+            children=[s for s in updated['slots'] if s.get('catchup_for')]
+            self.assertTrue(children)
+            self.assertEqual(MicroPlanStore(Store(path)).schedule_catchups(now),updated)
+            for old in original['slots']:
+                current=next(s for s in updated['slots'] if s['id']==old['id'])
+                self.assertEqual(current['scheduled_at'],old['scheduled_at'])
+            self.assertEqual(updated['target'],original['target'])
     def test_existing_plan_gets_news_allocation_without_redrawing_or_retagging_queue(self):
         from workbench.micro_queue import MicroQueue
         with tempfile.TemporaryDirectory() as tmp:

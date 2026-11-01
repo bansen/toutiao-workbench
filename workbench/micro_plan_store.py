@@ -6,7 +6,7 @@ import uuid
 from contextlib import closing
 from datetime import datetime, timezone
 
-from .micro_schedule import expire_missed_slots, generate_daily_plan, TIMEZONE
+from .micro_schedule import expire_missed_slots, generate_daily_plan, add_catchup_slots, TIMEZONE
 from .content_mix import assign_content_mix, content_kind
 
 
@@ -57,6 +57,22 @@ class MicroPlanStore:
         with self.store.connection() as db:
             row=db.execute('SELECT payload FROM micro_daily_plans WHERE day=?',(key,)).fetchone()
         return json.loads(row[0]) if row else None
+
+    def schedule_catchups(self, now, blocked_times=()):
+        day=now.astimezone(TIMEZONE).date().isoformat()
+        with self.store.connection() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row=db.execute('SELECT payload FROM micro_daily_plans WHERE day=?',(day,)).fetchone()
+            if row is None:return None
+            plan=json.loads(row[0])
+            protected=[]
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='micro_publish_queue'").fetchone():
+                protected=[item['slot_id'] for record in db.execute('SELECT payload FROM micro_publish_queue')
+                    if (item:=json.loads(record[0]))['status'] in {'pending','awaiting_confirmation','publishing','submitted','published','rejected','uncertain'}]
+            result=add_catchup_slots(plan,now,blocked_times,protected_ids=protected)
+            if result!=plan:
+                db.execute('UPDATE micro_daily_plans SET payload=? WHERE day=?',(self.store.dump(result),day))
+            return result
 
     def update_slot(self, slot_id, changes, expected_statuses=None, *, before_submit=False):
         """Atomically update slot progress while preserving the drawn schedule."""
