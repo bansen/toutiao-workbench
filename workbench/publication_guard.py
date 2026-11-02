@@ -9,6 +9,7 @@ from .browser import NeedsAttention
 from .publishing_checks import check_publish_declarations
 from .post_layout import external_link_issues
 from .draft_review import draft_hash
+from .micro_schedule import TIMEZONE, PUBLISH_START_HOUR, PUBLISH_END_HOUR
 
 
 def digest(body):
@@ -86,8 +87,8 @@ class PublicationGuard:
 
     def check_time(self):
         now = self.clock()
-        if now.tzinfo is None or not 8 <= now.astimezone(ZoneInfo('Asia/Shanghai')).hour < 22:
-            raise NeedsAttention('仅允许北京时间08:00至22:00提交，不补发错过时段')
+        if now.tzinfo is None or not PUBLISH_START_HOUR <= now.astimezone(TIMEZONE).hour < PUBLISH_END_HOUR:
+            raise NeedsAttention('仅允许北京时间07:00至23:00提交')
 
     async def send(self, candidate, account_id, confirmed_sha256, preflight, submit):
         frozen = json.loads(json.dumps(candidate, ensure_ascii=False))

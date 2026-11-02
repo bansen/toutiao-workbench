@@ -15,20 +15,22 @@ from .content_mix import assign_content_mix
 TIMEZONE = ZoneInfo('Asia/Shanghai')
 MIN_DAILY_TARGET=40
 MAX_DAILY_TARGET=45
+PUBLISH_START_HOUR=7
+PUBLISH_END_HOUR=23
 
 
 def add_catchup_slots(plan, now, blocked_times=(), rng=None, *, protected_ids=()):
     """Append durable same-day replacement slots; never revive an old queue."""
     clock=_local_clock(now)
     result=deepcopy(plan)
-    if result['date']!=clock.date().isoformat() or clock.hour>=22:return result
+    if result['date']!=clock.date().isoformat() or clock.hour>=PUBLISH_END_HOUR:return result
     from random import SystemRandom
     rng=rng or SystemRandom()
     blocked_times=tuple(_local_clock(t) for t in blocked_times)
     protected_ids=set(protected_ids)
     separation=timedelta(minutes=16)  # one-minute allowance for actual submit latency
-    end=datetime.combine(clock.date(),time(22),tzinfo=TIMEZONE)
-    earliest=max(clock+timedelta(minutes=10),datetime.combine(clock.date(),time(8),tzinfo=TIMEZONE))
+    end=datetime.combine(clock.date(),time(PUBLISH_END_HOUR),tzinfo=TIMEZONE)
+    earliest=max(clock+timedelta(minutes=10),datetime.combine(clock.date(),time(PUBLISH_START_HOUR),tzinfo=TIMEZONE))
     active={'pending','queued','awaiting_confirmation','publishing','submitted','published','completed','uncertain','rejected'}
     fixed=[_slot_time(s) for s in result['slots'] if s['status'] in active]
     used=sum(s['status'] in active for s in result['slots'])
@@ -97,17 +99,17 @@ def _slot_time(slot: dict) -> datetime:
 
 
 def generate_daily_plan(day_or_now: date | datetime, rng: Random) -> dict:
-    """Draw 40–45 slots between 08:00 and 22:00 in Asia/Shanghai.
+    """Draw 40–45 slots between 07:00 and 23:00 in Asia/Shanghai.
 
     Each equal stratum draws within its inner 10%. Even at 45 slots,
-    adjacent extreme draws remain at least 16.8 minutes apart.
+    adjacent extreme draws remain at least 19.2 minutes apart.
     Passing an explicit RNG makes the plan reproducible without global state.
     """
     now = _local_clock(day_or_now) if isinstance(day_or_now, datetime) else None
     day = now.date() if now is not None else day_or_now
     target = rng.randint(MIN_DAILY_TARGET, MAX_DAILY_TARGET)
-    start = datetime.combine(day, time(8), tzinfo=TIMEZONE)
-    width = timedelta(hours=14) / target
+    start = datetime.combine(day, time(PUBLISH_START_HOUR), tzinfo=TIMEZONE)
+    width = timedelta(hours=PUBLISH_END_HOUR-PUBLISH_START_HOUR) / target
     slots = []
     for index in range(target):
         scheduled = start + width * (index + rng.uniform(.45, .55))

@@ -6,7 +6,7 @@ import uuid
 from contextlib import closing
 from datetime import datetime, timezone, timedelta
 
-from .micro_schedule import expire_missed_slots, generate_daily_plan, add_catchup_slots, TIMEZONE, MIN_DAILY_TARGET, MAX_DAILY_TARGET
+from .micro_schedule import expire_missed_slots, generate_daily_plan, add_catchup_slots, TIMEZONE, MIN_DAILY_TARGET, MAX_DAILY_TARGET, PUBLISH_START_HOUR
 from .content_mix import assign_content_mix, content_kind
 
 
@@ -50,7 +50,7 @@ class MicroPlanStore:
                 previous=plan['target']
                 # A partial legacy day adopts the requested lower bound; fresh
                 # full-day plans draw the complete 40–45 range.
-                plan['target']=(MIN_DAILY_TARGET if now.astimezone(TIMEZONE).hour>=8 else
+                plan['target']=(MIN_DAILY_TARGET if now.astimezone(TIMEZONE).hour>=PUBLISH_START_HOUR else
                     (rng or random.SystemRandom()).randint(MIN_DAILY_TARGET,MAX_DAILY_TARGET))
                 news=(plan['target']+1)//2-plan['content_mix']['news']
                 guides=plan['target']//2-plan['content_mix']['tool-guide']

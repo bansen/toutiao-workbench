@@ -132,11 +132,11 @@ class PublicationGuardTests(unittest.IsolatedAsyncioTestCase):
     async def test_end_of_window_after_preflight_stops_before_submit(self):
         candidate=draft()
         async def preflight(item):
-            self.guard.clock=lambda:datetime(2026,10,30,22,tzinfo=ZoneInfo('Asia/Shanghai'))
+            self.guard.clock=lambda:datetime(2026,10,30,23,tzinfo=ZoneInfo('Asia/Shanghai'))
             return {'account_id':'account','body_sha256':hashlib.sha256(item['body'].encode()).hexdigest(),
                     'exclusive':{'checked':False,'classes':'byte-checkbox'},
                     'ai':{'checked':True,'classes':'byte-checkbox byte-checkbox-checked'}}
-        async def submit(item): self.fail('22点后不得提交')
+        async def submit(item): self.fail('23点后不得提交')
         with self.assertRaises(NeedsAttention):
             await self.guard.send(candidate,'account',hashlib.sha256(candidate['body'].encode()).hexdigest(),preflight,submit)
         self.assertEqual(self.ledger.records('account'),[])
@@ -148,3 +148,10 @@ class PublicationGuardTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(NeedsAttention):
             await self.guard.send(candidate,'account',hashlib.sha256(candidate['body'].encode()).hexdigest(),callback,callback)
         self.assertEqual(self.ledger.records('account'),[])
+
+    def test_extended_window_boundaries(self):
+        for stamp,allowed in [('06:59:59',False),('07:00:00',True),('22:59:59',True),('23:00:00',False)]:
+            self.guard.clock=lambda stamp=stamp:datetime.fromisoformat('2026-10-30T'+stamp+'+08:00')
+            if allowed:self.guard.check_time()
+            else:
+                with self.assertRaises(NeedsAttention):self.guard.check_time()

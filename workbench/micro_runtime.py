@@ -11,7 +11,7 @@ from .browser import NeedsAttention
 from .micro_content import MicroContent, TOPICS
 from .micro_plan_store import MicroPlanStore
 from .micro_queue import MicroQueue
-from .micro_schedule import TIMEZONE
+from .micro_schedule import TIMEZONE, PUBLISH_START_HOUR, PUBLISH_END_HOUR
 from .publication_ledger import body_hash, _canonical_source
 from .ai_tools import PROFILE, AiToolContent, OfficialResearch, news_source_issues, REVIEW_POLICY
 from .draft_review import approve, approval_matches
@@ -224,7 +224,7 @@ class MicroRuntime:
         self._last_retention = now
 
     def _eligible(self, now):
-        return not self._closed and self._enabled() and self._ready() and not self._paused() and 8 <= now.hour < 22
+        return not self._closed and self._enabled() and self._ready() and not self._paused() and PUBLISH_START_HOUR <= now.hour < PUBLISH_END_HOUR
 
     def _preparation_slots(self, now):
         plan = self.plans.load(now.date()) or {}
@@ -528,8 +528,8 @@ class MicroRuntime:
                 'publish_phase':self._publish_phase,
                 'publish_elapsed_seconds':int((now-self._publish_started_at).total_seconds()) if self._running and self._publish_started_at else 0,
                 'content_mix_submitted': {kind:sum(content_kind(r)==kind for r in mix_rows) for kind in (NEWS,GUIDE)},
-                'state': 'paused' if pause.get('paused') else ('disabled' if not enabled else (('ready' if 8 <= now.hour < 22 else 'idle') if ready else 'unverified')),
-                'reason': pause.get('reason', '') if pause.get('paused') else (('' if 8 <= now.hour < 22 else '等待北京时间08:00发布窗口') if ready else ('模型配置缺失，请先配置模型' if not self._model_ready() else '请先核实发布账号与声明')),
+                'state': 'paused' if pause.get('paused') else ('disabled' if not enabled else (('ready' if PUBLISH_START_HOUR <= now.hour < PUBLISH_END_HOUR else 'idle') if ready else 'unverified')),
+                'reason': pause.get('reason', '') if pause.get('paused') else (('' if PUBLISH_START_HOUR <= now.hour < PUBLISH_END_HOUR else '等待北京时间07:00～23:00发布窗口') if ready else ('模型配置缺失，请先配置模型' if not self._model_ready() else '请先核实发布账号与声明')),
                 'paused': bool(pause.get('paused')), 'today': plan,
                 'service_active': bool(self._loop_task and not self._loop_task.done()),
                 'counts': dict(Counter(r['status'] for r in rows if (_time(r['scheduled_at']) or now).date() == now.date())),
@@ -804,7 +804,7 @@ class MicroRuntime:
             scheduled = _time(row['scheduled_at'])
             if row['status'] != 'awaiting_confirmation' or sha != row['body_sha256']:
                 raise ValueError('只能确认等待人工检查的准确正文快照')
-            if not self._ready() or not scheduled or scheduled <= now or scheduled.date() != now.date() or not 8 <= scheduled.hour < 22:
+            if not self._ready() or not scheduled or scheduled <= now or scheduled.date() != now.date() or not PUBLISH_START_HOUR <= scheduled.hour < PUBLISH_END_HOUR:
                 raise ValueError('账号尚未核实或排期已过期')
             draft = self.store.draft(row['draft_id'])
             if any(draft.get(k) != row.get(k) for k in ('title', 'body', 'sources', 'verify')) or draft.get('verify'):

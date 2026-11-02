@@ -37,7 +37,7 @@ class CatchupTests(unittest.TestCase):
         for s,state in zip(plan['slots'],['submitted','uncertain','published','rejected']):s['status']=state
         self.assertEqual(add_catchup_slots(plan,datetime(2026,11,1,10,tzinfo=TZ)),plan)
         plan=self.plan()
-        self.assertEqual(add_catchup_slots(plan,datetime(2026,11,1,22,tzinfo=TZ)),plan)
+        self.assertEqual(add_catchup_slots(plan,datetime(2026,11,1,23,tzinfo=TZ)),plan)
         self.assertEqual(add_catchup_slots(plan,datetime(2026,11,2,10,tzinfo=TZ)),plan)
 
     def test_full_gaps_can_shift_only_unprepared_future_slot_to_fit_missed_target(self):
@@ -47,14 +47,14 @@ class CatchupTests(unittest.TestCase):
             {'id':str(i),'scheduled_at':(now+timedelta(minutes=20+28*i)).isoformat(),
              'status':'pending','content_type':'tool-guide'} for i in range(4)]
         # Limit the remaining day to a dense final sequence, with no free 32m gap.
-        now=datetime(2026,11,1,20,tzinfo=TZ)
+        now=datetime(2026,11,1,21,tzinfo=TZ)
         for i,s in enumerate(plan['slots'][1:]):s['scheduled_at']=(now+timedelta(minutes=20+28*i)).isoformat()
         result=add_catchup_slots(plan,now,rng=random.Random(1))
         self.assertTrue(next(s for s in result['slots'] if s['id']=='a').get('catchup_slot_id'))
         active=sorted(datetime.fromisoformat(s['scheduled_at']) for s in result['slots'] if s['status']=='pending')
         self.assertEqual(len(active),5)
         self.assertTrue(all(b-a>=timedelta(minutes=16) for a,b in zip(active,active[1:])))
-        self.assertTrue(all(t.hour<22 for t in active))
+        self.assertTrue(all(t.hour<23 for t in active))
         for original in plan['slots']:
             self.assertEqual(next(s for s in result['slots'] if s['id']==original['id'])['scheduled_at'],original['scheduled_at'])
     def test_manual_cancel_and_confirmed_before_submit_failure_are_not_blindly_retried(self):
@@ -79,3 +79,9 @@ class CatchupTests(unittest.TestCase):
         self.assertEqual(len(new),1)
         self.assertEqual(new[0]['catchup_for'],first['id'])
         self.assertGreaterEqual(datetime.fromisoformat(new[0]['scheduled_at'])-later,timedelta(minutes=16))
+
+    def test_catchup_uses_extended_evening_window(self):
+        result=add_catchup_slots(self.plan(),datetime(2026,11,1,22,tzinfo=TZ),rng=random.Random(1))
+        children=[s for s in result['slots'] if s.get('catchup_for')]
+        self.assertEqual(len(children),2)
+        self.assertTrue(all(22<=datetime.fromisoformat(s['scheduled_at']).hour<23 for s in children))

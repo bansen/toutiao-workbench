@@ -26,8 +26,8 @@ class MicroScheduleTests(unittest.TestCase):
                 self.assertEqual(len(plan['slots']), plan['target'])
                 self.assertEqual(len({slot['id'] for slot in plan['slots']}), plan['target'])
                 times = [datetime.fromisoformat(slot['scheduled_at']) for slot in plan['slots']]
-                start = datetime(2026, 10, 29, 8, tzinfo=SHANGHAI)
-                end = start + timedelta(hours=14)
+                start = datetime(2026, 10, 29, 7, tzinfo=SHANGHAI)
+                end = start + timedelta(hours=16)
                 width = (end - start) / plan['target']
                 for index, (slot, scheduled) in enumerate(zip(plan['slots'], times)):
                     self.assertEqual(set(slot), {'id', 'scheduled_at', 'status', 'content_type'})
@@ -56,7 +56,7 @@ class MicroScheduleTests(unittest.TestCase):
             self.assertEqual(slot['status'], expected)
 
     def test_utc_clock_uses_shanghai_calendar_day(self):
-        now = datetime(2026, 10, 28, 23, 30, tzinfo=timezone.utc)
+        now = datetime(2026, 10, 28, 22, 30, tzinfo=timezone.utc)
         plan = micro_schedule.generate_daily_plan(now, random.Random(1))
         self.assertEqual(plan['date'], DAY.isoformat())
         self.assertTrue(all(slot['status'] == 'pending' for slot in plan['slots']))

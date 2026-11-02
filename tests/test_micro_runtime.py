@@ -718,7 +718,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_outside_window_is_idle_and_reports_service_activity(self):
         await self.runtime.verify(); self.now=self.now.replace(hour=23)
         self.assertEqual(self.runtime.status()['state'],'idle')
-        self.assertIn('08:00',self.runtime.status()['reason'])
+        self.assertIn('07:00',self.runtime.status()['reason'])
         self.assertFalse(self.runtime.status()['service_active'])
     async def test_background_browser_waiter_rechecks_publication_priority(self):
         calls=[]

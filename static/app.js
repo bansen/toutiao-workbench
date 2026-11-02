@@ -195,7 +195,7 @@ function renderPublishing(config) {
   $('publishing-state').dataset.state=config.state;
   const labels={disabled:'自动发布已关闭',unverified:'设置已开启 · 待验证，未运行',paused:'自动发布已暂停',idle:'自动发布已就绪 · 等待运行时段',ready:config.running?`正在${config.publish_phase||'核查并发布'} · ${config.publish_elapsed_seconds||0}秒`:config.preparing?'正在自动选题与成稿':config.next_ready?'已有审核完成的稿件 · 等待排期':'缺少审核完成的稿件 · 等待补稿'};
   $('publishing-state').textContent=labels[config.state]||'状态待核实';
-  $('publishing-reason').textContent=config.reason||'错过的排期当天另排补发，间隔至少15分钟；22点停止，审核不通过不发布。';
+  $('publishing-reason').textContent=config.reason||'错过的排期当天另排补发，间隔至少15分钟；23点停止，审核不通过不发布。';
   $('publishing-account').textContent='账号：'+config.account;
   const counts=config.counts||{},slots=config.today?.slots||[];
   const stats=[['今日目标',config.today?.target||0],['已提交',config.submitted_total??((counts.submitted||0)+(counts.published||0)+(counts.rejected||0))],['已发布',config.published_total??(counts.published||0)],['待补发',config.catchup_pending||0],['新增名额待发',config.extra_pending||0],['已跳过',slots.filter(s=>s.status==='skipped'&&!s.catchup_slot_id&&!s.quota_increase).length],['待核实',counts.uncertain||0]];
