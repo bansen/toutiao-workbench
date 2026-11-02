@@ -20,7 +20,7 @@ function draw(){
  document.querySelector('.fake-pagination').innerHTML=`<li class="fake-pagination-item active">${page}</li><li onclick="next()" class="fake-pagination-item ${page===2?'disabled':''}"><svg class="byte-icon-right"></svg></li>`;
 }
 function next(){if(page===2)return;document.querySelector('#list').innerHTML='';setTimeout(()=>{page=2;draw()},250)}
-function detail(){let e=document.createElement('div');e.className='byte-drawer';e.innerHTML=`<button class="byte-drawer-close-icon" onclick="this.parentNode.remove()">关闭</button><div class="info-time">DAY 09:00</div><div class="single-data-board-group">累计数据<div class="primary">展现量<span class="num">100</span></div><div class="primary">阅读量<span class="num">0</span></div></div><div class="interaction-alone"><div class="inter-item">点赞<span class="num">0</span></div><div class="inter-item">评论<span class="num">0</span></div><div class="inter-item">收藏<span class="num">待更新</span></div><div class="inter-item">分享<span class="num">0</span></div></div>`;document.body.append(e)}
+function detail(){let e=document.createElement('div');e.className='byte-drawer';e.innerHTML=`<button class="byte-drawer-close-icon" onclick="this.parentNode.remove()">关闭</button><div class="info-time">DAY 09:00</div><div class="single-data-board-group">单篇数据<div class="primary">展现量<span class="num">101</span></div><div class="primary">阅读量<span class="num">0</span></div></div><div class="interaction-alone"><div class="inter-item">点赞<span class="num">0</span></div><div class="inter-item">评论<span class="num">0</span></div><div class="inter-item">收藏<span class="num">待更新</span></div><div class="inter-item">分享<span class="num">0</span></div></div>`;document.body.append(e)}
 draw();
 </script>'''.replace('DAY',day)
     with tempfile.TemporaryDirectory() as directory:
@@ -37,7 +37,7 @@ draw();
             assert result['complete'] and result['pagination']['pages']==2,result
             assert len(result['rows'])==12
             assert result['verified_samples']==10
-            assert all(r['scope']=='cumulative' and r['metrics']['reads']==0 and r['metrics']['favorites'] is None for r in result['rows'])
+            assert all(r['scope']=='current_snapshot' and r['metrics']['impressions']==101 and r['metrics']['reads']==0 and r['metrics']['favorites'] is None for r in result['rows'])
             assert not browser.lock.locked()
             # An older ordered page can end the requested window even when
             # the platform incorrectly leaves Next enabled for empty history.
@@ -48,7 +48,7 @@ draw();
             assert bounded['complete'] and len(bounded['rows'])==10,bounded
             assert bounded['pagination']['stop_reason']=='verified_date_boundary'
             assert not browser.lock.locked()
-            print('PASS: delayed pagination; visible max is not final; 12 unique public IDs; ten list/drawer matches; zero/unknown; lock released. No real platform requests.')
+            print('PASS: delayed pagination; visible max is not final; 12 unique public IDs; ten detail-display checks with stale list counters; zero/unknown; lock released. No real platform requests.')
         finally:await browser.close()
 
 asyncio.run(main())

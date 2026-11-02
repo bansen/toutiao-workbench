@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import math
+from .review_metrics import SUPPORTED_SCOPES
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -162,7 +163,7 @@ class EditorialPolicy:
                 if _number(row.get('impressions')) or (_number(known) and known>0):return None
         for r in cohorts:
             if r.get('arm') not in ('baseline','trial') or r.get('content_kind') not in KINDS or r.get('age_band') not in AGES:continue
-            if r.get('experiment_id') != active['id'] or r.get('scope')!='cumulative':continue
+            if r.get('experiment_id') != active['id'] or r.get('scope') not in SUPPORTED_SCOPES:continue
             if r.get('publication_band') not in {'00-06','06-12','12-18','18-24'}:continue
             try:_day(r.get('publication_date'))
             except (TypeError,ValueError):continue

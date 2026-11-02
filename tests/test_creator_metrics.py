@@ -55,3 +55,12 @@ class CoverageTests(unittest.TestCase):
         self.assertTrue(done)
         for times,prior in [(['未知'],None),([],None),(['10-29 09:00','10-30 04:00'],None),(['10-30 04:00'],datetime(2026,10,29,5,tzinfo=TIMEZONE))]:
             self.assertFalse(date_coverage(times,prior,start,True,now)[2])
+
+class CurrentDisplayTests(unittest.TestCase):
+    def test_current_display_verification_is_independent_of_stale_list(self):
+        from workbench.creator_analytics import verify_display
+        cells=[{'label':'展现量','value':'1,234'},{'label':'阅读量','value':'0'},
+               {'label':'收藏','value':'待更新'},{'label':'粉丝展现量','value':'99'}]
+        self.assertTrue(verify_display(cells,detail_metrics(cells)))
+        self.assertFalse(verify_display([{'label':'阅读量','value':'解析失败'}],{'reads':None}))
+        self.assertFalse(verify_display(cells+ [{'label':'展现量','value':'999'}],detail_metrics(cells)))

@@ -140,12 +140,11 @@ class ReviewService:
             self.reviews.fail(review_id,'collection_failed',now=self._now())
 
     def _capability_validation(self,record,result):
-        from .review_metrics import timestamp
+        from .review_metrics import timestamp,SUPPORTED_SCOPES,verified_sample
         target=record['date'];rows=result.get('rows') or []
         target_rows=[r for r in rows if r.get('status')=='published' and
                      (when:=timestamp(r.get('published_at'))) is not None and when.date().isoformat()==target]
-        keys=('list_drawer_match','time_match','public_id_verified')
-        verified=sum(all((r.get('verification') or {}).get(k) is True for k in keys) for r in target_rows)
+        verified=sum(verified_sample(r) for r in target_rows)
         count=record.get('report',{}).get('post_count',0);required=min(10,count)
         raw_count=result.get('verified_samples');collector_count=raw_count if type(raw_count) is int and raw_count>=0 else 0
         pagination=result.get('pagination') or {};pages=pagination.get('pages')
@@ -160,7 +159,7 @@ class ReviewService:
         if not pagination['complete'] or pagination['pages'] is None or pagination['pages']<1:failures.append('pagination_incomplete')
         if verified<required or collector_count<required:failures.append('sample_verification_incomplete')
         if record.get('report',{}).get('complete') is not True:failures.append('report_incomplete')
-        if not target_rows or any(r.get('scope')!='cumulative' for r in target_rows):failures.append('statistical_scope_unverified')
+        if not target_rows or any(r.get('scope') not in SUPPORTED_SCOPES for r in target_rows):failures.append('statistical_scope_unverified')
         warnings=[v[:500] for v in (result.get('warnings') or [])[:30] if isinstance(v,str)]
         summary={'passed':not failures,'target_rows':count,'required_samples':required,'verified_samples':verified,
                  'collector_verified_samples':collector_count,'account_checked':result.get('account_checked') is True,

@@ -7,6 +7,7 @@ from pathlib import Path
 from .browser import NeedsAttention
 from .micro_schedule import TIMEZONE
 from .toutiao_publisher import ToutiaoPublisher,MANAGE
+from .review_metrics import verified_sample
 
 LABELS={'展现':'impressions','展现量':'impressions','阅读':'reads','阅读量':'reads','点赞':'likes','评论':'comments','收藏':'favorites','分享':'shares','涨粉':'follows','创作收益':'revenue'}
 
@@ -21,6 +22,19 @@ def detail_metrics(cells):
         else:values[key]=parse_count(text)
     return values
 
+def verify_display(cells,metrics):
+    """Check the chosen detail display, independently of older list counters."""
+    seen={}
+    for cell in cells:
+        key=LABELS.get((cell.get('label') or '').strip())
+        if key not in ('impressions','reads','likes','comments','favorites','shares'):continue
+        text=(cell.get('value') or '').strip()
+        value=parse_count(text)
+        if value is None and text not in ('待更新','--','—','暂无','未开通'):return False
+        if key in seen and seen[key]!=value:return False
+        seen[key]=value
+    return bool(seen) and all(metrics.get(k)==v for k,v in seen.items())
+
 def normalize_row(raw,now):
     values=detail_metrics([{'label':m[1],'value':m[2]} for text in raw.get('stats',[]) if (m:=re.fullmatch(r'(展现|阅读|点赞|评论)\s*(.*)',text.strip()))])
     body=raw.get('body','').removesuffix('展开...').removesuffix('展开').strip()
@@ -29,7 +43,7 @@ def normalize_row(raw,now):
         'status':platform_status(raw.get('status','')),'metrics':values,'scope':'unverified',
         'source_url':None,'content_kind':'unknown','subtopic':None,'editorial_context':None,
         'field_sources':{'title':'作品管理 .wtt-text','published_at':'作品管理 .time','status':'作品管理 .tags','metrics':'作品管理 .stat'},
-        'statistical_scope':'单篇作品界面快照；未核实累计口径'}
+        'statistical_scope':'列表初始值；尚未读取单篇详情'}
 
 def date_coverage(times,previous,start,ordered,now):
     """An empty or unsorted page never proves coverage of a date window."""
@@ -136,7 +150,7 @@ class CreatorAnalytics:
         def result():
             return {'rows':rows,'complete':complete and not warnings,'capabilities':capabilities,'warnings':list(dict.fromkeys(warnings)),
                 'account_checked':True,'pagination':{'pages':len(pages),'complete':complete,'stop_reason':coverage_stop,'window_start':window_start.isoformat(),'chronological_order_verified':ordered},
-                'verified_samples':sum(all(r.get('verification',{}).values()) for r in [r for r in rows if r['published_at'][:10]==target_date][:10])}
+                'verified_samples':sum(verified_sample(r) for r in [r for r in rows if r['published_at'][:10]==target_date][:10])}
         capabilities={k:None for k in set(LABELS.values())}
         async def acquire():
             if actor.owns_lock:return
@@ -202,13 +216,13 @@ class CreatorAnalytics:
                             return {label:c.textContent.replace(/元/g,'').trim(),value:n.innerText};})''')
                         metrics=detail_metrics(cells)
                         record['metrics'].update(metrics)
+                        record['metric_display_values']=cells
                         record['field_sources']['metrics']='作品管理 → 查看数据 → 单篇流量/互动/粉丝/收益'
-                        # Scope must be evidenced in this exact rendered data panel.
-                        scope_text=await drawer.locator('.single-data-board-group').inner_text()
-                        if any(line.strip() in ('累计数据','作品累计数据','累计作品数据') for line in scope_text.splitlines()):
-                            record['scope']='cumulative';record['statistical_scope']='单篇累计指标（界面标注累计）；部分数据延迟更新'
+                        record['scope']='current_snapshot'
+                        record['statistical_scope']='截至本帖采集时后台单篇显示值；不代表目标自然日新增'
                         record['observed_at']=datetime.now(TIMEZONE).isoformat()
-                        record['verification']={'list_drawer_match':all(record['metrics'].get(k)==normalize_row(item,now)['metrics'].get(k) for k in ('impressions','reads','likes','comments')),
+                        record['verification']={'display_fields_verified':verify_display(cells,metrics),
+                            'list_drawer_match':all(record['metrics'].get(k)==normalize_row(item,now)['metrics'].get(k) for k in ('impressions','reads','likes','comments')),
                             'time_match':(await drawer.locator('.info-time').inner_text()).strip()==item['time'].strip(),
                             'public_id_verified':bool(record['platform_id'])}
                         if when.date()==target and sample_captures<10:
@@ -248,8 +262,6 @@ class CreatorAnalytics:
                 await actor.page.wait_for_function('''arg=>{const e=document.querySelector('.post-item');return e&&e.innerText&&e.innerText!==arg.old&&document.querySelector('.fake-pagination-item.active')?.innerText.trim()===String(arg.next)}''',arg={'old':first,'next':int(active)+1},timeout=15000)
                 release()
             else:warnings.append('超过100页安全上限')
-            for row in rows:
-                if row['scope']!='cumulative':warnings.append('单篇指标累计口径未得到界面明确确认');break
             return result()
         except Exception as exc:
             warnings.append(stage+'失败（'+type(exc).__name__+'）')

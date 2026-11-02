@@ -260,6 +260,23 @@ class EditorialPolicyTests(unittest.TestCase):
             self.assertEqual(render_preferences(context),'')
 
 
+    def test_current_snapshot_cohorts_can_be_evaluated_without_cumulative_label(self):
+        self.start()
+        for day in ('2026-11-02','2026-11-03'):
+            r=report(day)
+            for item in r['cohorts']:item['scope']='current_snapshot'
+            result=self.evaluate(r)
+        self.assertEqual(result['last_action'],'promoted')
+
+
+    def test_different_supported_snapshot_types_do_not_form_a_matched_pair(self):
+        self.start()
+        r=report('2026-11-02');r['cohorts'][1]['scope']='current_snapshot'
+        result=self.evaluate(r)
+        self.assertEqual(result['active']['streak'],0)
+        self.assertEqual(result['last_action'],'started')
+
+
 class EditorialGenerationTests(unittest.IsolatedAsyncioTestCase):
     async def test_generation_and_repair_preserve_controlled_context(self):
         from unittest.mock import AsyncMock

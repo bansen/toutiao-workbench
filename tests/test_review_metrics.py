@@ -103,3 +103,17 @@ class ReviewMetricsTests(unittest.TestCase):
         text=local_markdown('2026-10-31',[row(metrics={'reads':20,'favorites':4,'shares':5}),row(platform_id='rejected-id',status='rejected')])
         for value in ('收藏','分享','状态','发布时间','口径','采集时间','平台ID','来源','secret-post','private.invalid','rejected-id','rejected','cumulative','2026-11-01T05:13:00+08:00','未知'):
             self.assertIn(value,text)
+
+class CurrentSnapshotTests(unittest.TestCase):
+    def test_current_snapshots_are_valid_and_refresh_mature_comparisons(self):
+        r=build_report('2026-10-31',[row(scope='current_snapshot'),
+            row(platform_id='older',published_at='2026-10-30T18:00:00+08:00',scope='current_snapshot')],True)
+        self.assertTrue(r['complete'])
+        self.assertEqual(r['ratios']['read_rate'],.2)
+        self.assertEqual(len(r['mature']),1)
+        self.assertEqual(r['data_basis'],'per_post_display_at_collection')
+        self.assertTrue(r['as_of']['to'].startswith('2026-11-01T05:13'))
+        self.assertNotIn('unverified_scope',r['warnings'])
+    def test_different_snapshot_definitions_do_not_share_a_ratio(self):
+        r=build_report('2026-10-31',[row(),row(platform_id='snapshot',scope='current_snapshot')],True)
+        self.assertIsNone(r['ratios']['read_rate'])

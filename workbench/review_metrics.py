@@ -8,6 +8,12 @@ from zoneinfo import ZoneInfo
 METRICS=('impressions','reads','likes','comments','favorites','shares','follows','revenue')
 TOTALS=METRICS[:6]
 ZONE=ZoneInfo('Asia/Shanghai')
+SUPPORTED_SCOPES=frozenset(('cumulative','current_snapshot'))
+
+
+def verified_sample(row):
+    field='display_fields_verified' if row.get('scope')=='current_snapshot' else 'list_drawer_match'
+    return all((row.get('verification') or {}).get(k) is True for k in (field,'time_match','public_id_verified'))
 
 
 def number(value):
@@ -80,8 +86,8 @@ def _build_day_report(target_date,rows,complete,capabilities=None,warnings=None)
         when=timestamp(row['published_at']);observed=timestamp(row['observed_at'])
         band=age_band((observed-when).total_seconds()/3600)
         period=f'{when.hour//6*6:02d}-{when.hour//6*6+6:02d}'
-        scope=row.get('scope') if row.get('scope') in ('cumulative','unverified') else 'unverified'
-        if scope!='cumulative':
+        scope=row.get('scope') if row.get('scope') in SUPPORTED_SCOPES else 'unverified'
+        if scope not in SUPPORTED_SCOPES:
             bad=True;warning_codes.add('unverified_scope')
         traits=title_traits(row.get('title'))
         trait_key=(row.get('content_kind') if row.get('content_kind') in ('news','tool-guide') else 'unknown',band,period,scope,*traits.values())
@@ -102,18 +108,21 @@ def _build_day_report(target_date,rows,complete,capabilities=None,warnings=None)
         sums,cov=_summary(group)
         traits.append({'content_kind':kind,'age_band':band,'publication_band':period,'scope':scope,'title_length_band':length,'question':question,'number':digit,'contrast':contrast,'posts':len(group),'totals':{k:sums[k] for k in TOTALS},'metric_coverage':cov})
     ratios={}
-    comparable=bool(published) and all(r.get('scope')=='cumulative' for r in published)
+    scopes={r.get('scope') for r in published}
+    comparable=bool(published) and len(scopes)==1 and scopes<=SUPPORTED_SCOPES
     for name,numerator,denominator in (('read_rate','reads','impressions'),('like_rate','likes','reads'),('comment_rate','comments','reads'),('favorite_rate','favorites','reads'),('share_rate','shares','reads')):
         ratios[name]=totals[numerator]/totals[denominator] if comparable and totals[numerator] is not None and totals[denominator] is not None and totals[denominator]>0 else None
     capability={k:(capabilities or {}).get(k) if isinstance((capabilities or {}).get(k),bool) else None for k in METRICS}
-    return {'date':day,'complete':complete is True and not bad,'sample_count':coverage['reads']['known'],'post_count':len(published),'totals':{k:totals[k] for k in TOTALS},'metric_coverage':coverage,'cohorts':cohorts,'traits':traits,'ratios':ratios,'capabilities':capability,'warnings':sorted(warning_codes),'warning_count':len(warning_codes),'quality_alert':False}
+    observed=[timestamp(r['observed_at']) for r in published]
+    as_of={'from':min(observed).isoformat(),'to':max(observed).isoformat()} if observed else None
+    return {'date':day,'data_basis':'per_post_display_at_collection','as_of':as_of,'complete':complete is True and not bad,'sample_count':coverage['reads']['known'],'post_count':len(published),'totals':{k:totals[k] for k in TOTALS},'metric_coverage':coverage,'cohorts':cohorts,'traits':traits,'ratios':ratios,'capabilities':capability,'warnings':sorted(warning_codes),'warning_count':len(warning_codes),'quality_alert':False}
 
 
 def build_report(target_date,rows,complete,capabilities=None,warnings=None):
     """Summarize the target day and separately retain eligible mature snapshots.
 
     Older snapshots remain grouped by their own publication date. Only validated,
-    cumulative observations younger than 72 hours enter mature comparisons.
+    supported observations younger than 72 hours enter mature comparisons.
     """
     day=date.fromisoformat(target_date).isoformat()
     report=_build_day_report(day,rows,complete,capabilities,warnings)
@@ -126,7 +135,7 @@ def build_report(target_date,rows,complete,capabilities=None,warnings=None):
         if observed is None or observed<when:
             rejected=True;continue
         if (observed-when).total_seconds()>=72*3600:continue
-        if row.get('scope')!='cumulative':
+        if row.get('scope') not in SUPPORTED_SCOPES:
             rejected=True;continue
         if row.get('status')!='published':
             if row.get('status') not in ('submitted','rejected'):rejected=True
@@ -152,7 +161,7 @@ def local_markdown(target_date,rows):
     valid=[r for r in rows if timestamp(r.get('published_at')) and timestamp(r['published_at']).date().isoformat()==target_date]
     valid.sort(key=lambda r: r.get('metrics',{}).get('reads') if number(r.get('metrics',{}).get('reads')) else -1,reverse=True)
     headings=['排名','标题','阅读','展现','点赞','评论','收藏','分享','转粉','收益(元)','状态','发布时间','口径','采集时间','平台ID','来源']
-    lines=[f'# {target_date} 本地逐帖复盘','', '| '+' | '.join(headings)+' |','| '+' | '.join(['---']*len(headings))+' |']
+    lines=[f'# {target_date} 本地逐帖复盘','','统计值截至各帖的采集时间，不代表目标自然日新增。','', '| '+' | '.join(headings)+' |','| '+' | '.join(['---']*len(headings))+' |']
     def cell(value):
         return str(value if value is not None else '未知').replace('|','\\|').replace('\n',' ').replace('\r',' ')
     for index,r in enumerate(valid,1):

@@ -209,3 +209,18 @@ class ReviewServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resumed['first_due'],activated['first_due'])
         self.assertEqual(reopened.check_due()['date'],'2026-11-05')
         self.assertTrue(reopened.check_due()['due'])
+
+    async def test_current_display_snapshot_can_validate_despite_stale_list(self):
+        result=self.collector.collect.return_value
+        result['rows'][0].update(scope='current_snapshot',verification={'display_fields_verified':True,'list_drawer_match':False,'time_match':True,'public_id_verified':True})
+        record=await self.ready(True)
+        self.assertEqual(record['state'],'ready')
+        self.assertTrue(record['capability_validation']['passed'])
+        self.assertEqual(self.service.finish(record['id'],[],[])['state'],'completed')
+        self.assertEqual(self.policy.status()['version'],0)
+
+    async def test_snapshot_still_requires_chosen_display_verification(self):
+        self.collector.collect.return_value['rows'][0].update(scope='current_snapshot')
+        record=await self.ready(True)
+        self.assertEqual(record['state'],'attention')
+        self.assertIn('sample_verification_incomplete',record['capability_validation']['failure_codes'])
