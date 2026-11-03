@@ -43,7 +43,7 @@ def create_app(data_dir=None,browser=None,llm=None,publisher=None):
         store.set_setting('publishing',{'enabled':True})
     caps=json.loads((ROOT/'docs/capabilities.json').read_text())
     browser=browser or Browser(data_dir/'browser')
-    llm=llm or LLM(*load_model_values(ROOT,data_dir))
+    llm=llm or LLM(*load_model_values(ROOT,data_dir),usage_path=data_dir/'model-usage.jsonl')
     engine=Engine(store,browser,llm,caps)
     publications=PublicationLedger(store)
     guard=PublicationGuard(publications,getattr(llm,"judge_duplicate",None),

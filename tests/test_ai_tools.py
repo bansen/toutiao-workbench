@@ -240,3 +240,42 @@ class AiToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repaired['body'].splitlines()[0],repaired['title'])
         self.assertEqual(repaired['options']['profile'],PROFILE)
         self.assertEqual(repaired['editorial_review'],['删除无证据的价格'])
+
+class CompactEditorialPayloadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_repair_excludes_duplicate_snapshots_and_internal_approvals(self):
+        service=AiToolContent(None)
+        service.request=AsyncMock(return_value={'title':BODY.splitlines()[0],'body':BODY,'verify':[]})
+        draft={'title':BODY.splitlines()[0],'body':BODY,'verify':['问题'],'source_snapshots':[SOURCE],'review_approval':{'private':'内部'}}
+        await service.repair(draft,[SOURCE],'AI',['问题'])
+        data=service.request.call_args.args[1]
+        self.assertNotIn('source_snapshots',data['draft']);self.assertNotIn('review_approval',data['draft'])
+        self.assertEqual(data['sources'][0]['body'],SOURCE['body'])
+
+    async def test_identical_evidence_sent_once_but_changed_original_is_retained(self):
+        service=AiToolContent(None);service.request=AsyncMock(return_value={'passed':True,'issues':[]})
+        draft={'title':BODY.splitlines()[0],'body':BODY,'verify':[],'source_snapshots':[SOURCE]}
+        await service.check(draft,[SOURCE],'AI')
+        data=service.request.call_args.args[1]
+        self.assertEqual(data['initial_sources'],[])
+        self.assertEqual(data['unchanged_initial_sources'],[SOURCE['url']])
+        changed={**SOURCE,'body':SOURCE['body']+'新增事实'}
+        await service.check(draft,[changed],'AI')
+        data=service.request.call_args.args[1]
+        self.assertEqual(data['initial_sources'][0]['body'],SOURCE['body'])
+        self.assertEqual(data['current_sources'][0]['body'],changed['body'])
+
+class StableModelPrefixTests(unittest.IsolatedAsyncioTestCase):
+    async def test_clock_moves_to_user_data_so_editorial_rules_keep_stable_prefix(self):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        llm=SimpleNamespace(lock=asyncio.Lock(),_complete_json=AsyncMock(return_value={}))
+        service=MicroContent(llm)
+        with patch('workbench.micro_content.datetime') as clock:
+            clock.now.side_effect=[datetime(2026,11,3,10),datetime(2026,11,3,11)]
+            await service.request('固定编辑规则',{'sources':[SOURCE]})
+            await service.request('固定编辑规则',{'sources':[SOURCE]})
+        first,second=[call.args[0] for call in llm._complete_json.call_args_list]
+        self.assertEqual(first[0],second[0])
+        self.assertNotEqual(first[1],second[1])
+        self.assertIn('current_beijing_time',first[1]['content'])

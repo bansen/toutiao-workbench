@@ -266,6 +266,9 @@ class MicroRuntime:
     async def _qualify_ai(self, draft, sources, topic, allow_repair=True):
         if allow_repair and all(s.get('kind')=='official' for s in sources):
             draft={**draft,'body':format_post(normalize_tutorial_numbers(draft['body']))}
+        if approval_matches(draft,sources,self._now(),REVIEW_POLICY):
+            issues=self.content.input_issues(draft,sources) if hasattr(self.content,'input_issues') else []
+            if not issues:return draft,{'passed':True,'issues':[],'reused_approval':True}
         async def review(candidate):
             try:result=await self.content.check(candidate,sources,topic)
             except Exception as exc:return candidate,{'passed':False,'issues':['证据审核服务暂不可用：'+type(exc).__name__],'retryable':True}

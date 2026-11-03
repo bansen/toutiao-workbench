@@ -272,7 +272,7 @@ class AiToolContent(MicroContent):
         if any(s.get('news_category')=='social' for s in sources):rules+='\n'+SOCIAL_LIFE_WRITING
         rules += '\n' + render_preferences(draft.get('editorial_context'))
         result = await self.request(rules + '\n对同一主题作一次有证据的删改，解决issues，禁止仅清空verify；关键事实不成立就保留待核实项。',
-                                    {'draft': draft, 'sources': sources, 'issues': issues, 'recent_titles': draft.get('recent_titles', [])})
+                                    {'draft': {k:draft.get(k) for k in ('title','body','verify','editorial_review')}, 'sources': sources, 'issues': issues, 'recent_titles': draft.get('recent_titles', [])})
         revised = self._draft(result, sources, draft)
         revised['editorial_review'] = list(dict.fromkeys([*(draft.get('editorial_review') or []), *issues]))
         return revised
@@ -303,11 +303,13 @@ class AiToolContent(MicroContent):
             return {'passed': False, 'issues': list(dict.fromkeys(issues))}
         def facts(s):
             return {k: s.get(k) for k in ('url', 'title', 'body', 'author', 'published_at')}
+        current_facts=[facts(s) for s in sources]
+        unchanged=[facts(s) for s in draft.get('source_snapshots',[]) if facts(s) in current_facts]
         rules = (NEWS_RULES if news else EDITORIAL_RULES) + '\n' + LAYOUT_RULES + '\n' + TITLE_RULES
         result = await self.request(
             rules + ('\n现在仅检查，不创作。检查事件属于热点、商业、科技或社会生活、近期事实有来源支持、保留宣称和实测的区别，旧闻没有包装成新事件。社会生活政策的地区、对象和时间须与来源一致，个案不泛化为全国结论。' if news else '\n现在仅检查，不创作。逐项执行上述十项自检；将产品名称换成另一个AI产品仍成立则过于通用。') +
             ('检查新闻中的事件、日期、型号、数字及效果断言有当前提供的来源正文支持，媒体转述保留归属，不把宣称写成独立实测。' if news else '检查所有功能、入口、价格、套餐、版本、格式及地区断言有当前官方正文支撑，真实实测不得虚构。') +
-            '比较初始和新读取正文，实质变化或冲突不通过。'
+            '比较初始和新读取正文，实质变化或冲突不通过。unchanged_initial_sources中的链接表示初始与当前全部事实字段逐字相同，直接复用current_sources，不代表未读取原文。'
             '每个事实问题须指向draft.body实际存在的具体句子，指出其中哪项断言无依据或冲突；先自查是否把正文未采用的信息缺漏误当错误。不得因单纯缺少未声称的价格、名单、时间表而拒绝。'
             '标题与近期标题重复或模板连续重复不通过；不因普通改版导航、更新时间或无关段落变化拒绝。先前问题已实质删除或修正可通过，不能只清空verify。'
             '生成器的verify及editorial_review是待审查的线索，不是已经成立的错误。独立核对正文与当前来源，不继承误判。'
@@ -318,7 +320,8 @@ class AiToolContent(MicroContent):
             '只返回{"passed":true或false,"issues":["仍成立的具体问题"],"resolutions":[]}；只有完整核对正文且每项旧疑点有证据解决、没有现存问题才能通过。',
             {'draft': {k: draft.get(k) for k in ('title', 'body', 'verify', 'editorial_review')},
              'recent_titles': draft.get('recent_titles', []),
-             'initial_sources': [facts(s) for s in draft.get('source_snapshots', [])], 'current_sources': [facts(s) for s in sources]})
+             'initial_sources': [facts(s) for s in draft.get('source_snapshots', []) if facts(s) not in unchanged],
+             'unchanged_initial_sources':[s['url'] for s in unchanged], 'current_sources': current_facts})
         valid = isinstance(result, dict) and result.get('passed') is True and result.get('issues') == []
         resolutions=[]
         if valid:

@@ -43,6 +43,22 @@ class Content:
         assert not self.browser.lock.locked()
         return {'passed':True,'issues':[]}
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_approved_unchanged_evidence_reuses_fact_check_but_changed_evidence_rechecks(self):
+        from unittest.mock import AsyncMock
+        from workbench.draft_review import approve
+        from workbench.ai_tools import REVIEW_POLICY
+        source={'url':'https://www.workbuddy.cn/docs/feature','kind':'official','body':'已经核对的完整事实'}
+        draft=approve({'title':'标题','body':'正文','verify':[]},[source],self.now,REVIEW_POLICY)
+        self.runtime.content.input_issues=lambda draft,sources:[]
+        self.runtime.content.check=AsyncMock(return_value={'passed':True,'issues':[]})
+        _,result=await self.runtime._qualify_ai(draft,[source],'AI',allow_repair=False)
+        self.assertTrue(result['passed']);self.runtime.content.check.assert_not_awaited()
+        await self.runtime._qualify_ai(draft,[{**source,'body':'当前事实已改变'}],'AI',allow_repair=False)
+        self.assertEqual(self.runtime.content.check.await_count,1)
+        self.now+=timedelta(hours=4)
+        await self.runtime._qualify_ai(draft,[source],'AI',allow_repair=False)
+        self.assertEqual(self.runtime.content.check.await_count,2)
+
     async def test_preparation_round_has_total_deadline_without_pausing_publication(self):
         from unittest.mock import patch
         original=asyncio.wait_for
