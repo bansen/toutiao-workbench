@@ -1,7 +1,7 @@
 """Creator UI adapter. Only rendered DOM; never a private publishing API."""
 import asyncio
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urljoin, urlsplit
 
 from .browser import NeedsAttention, close_page
@@ -42,6 +42,17 @@ def rendered_text(text):
     # Chromium inserts an extra visual newline for empty editable blocks.
     # Keep word boundaries; never turn 'now here' into 'nowhere'.
     return re.sub(r'\s+',' ',text).strip()
+
+
+def listing_candidate(raw,when,draft):
+    """Locate a possible record only; a match is never a publication receipt."""
+    title=draft.get('title') or draft.get('body','').split('\n',1)[0]
+    if len(title.strip())<10 or not compact(raw).startswith(compact(title)):return False
+    try:
+        actual=datetime.fromisoformat(when)
+        submitted=datetime.fromisoformat(draft['scheduled_at'])
+        return bool(actual.tzinfo and submitted.tzinfo and abs(actual-submitted)<=timedelta(minutes=10))
+    except (ValueError,TypeError,KeyError):return False
 
 
 def receipt_body_comparison(actual,expected,*,allow_markup_adjustment=False,listing=False):
@@ -261,6 +272,7 @@ class ToutiaoPublisher:
 
     async def _lookup(self,draft,*,allow_markup_adjustment=False):
         matches=[]
+        candidates=[]
         today_count=0
         today=datetime.now(TIMEZONE).date()
         for row in await self.page.locator('.post-item').all():
@@ -278,6 +290,9 @@ class ToutiaoPublisher:
             }""")
             comparison=receipt_body_comparison(raw,draft['body'],allow_markup_adjustment=allow_markup_adjustment,listing=True)
             if comparison is not None:matches.append((row,comparison))
+            elif listing_candidate(raw,when,draft) and platform_status(await row.locator('.tags').inner_text())=='published':
+                candidates.append((row,{'requires_public_body':True}))
+        if not matches:matches=candidates
         if not matches:raise ReceiptPending('当前作品记录尚未出现匹配正文，只核查、不重发')
         if len(matches)!=1:raise NeedsAttention('作品记录出现多条相同正文，结果待核实，禁止重发')
         row,list_comparison=matches[0]

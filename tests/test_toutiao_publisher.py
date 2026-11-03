@@ -189,3 +189,12 @@ class ReceiptBodyComparisonTests(unittest.TestCase):
         for different in (body.replace('鉴权','匿名')+'</token>',body+'</other>',body+'</token>新增事实',body+'</token></token>'):
             self.assertIsNone(receipt_body_comparison(different,body,allow_markup_adjustment=True))
         self.assertTrue(receipt_body_comparison(body,body)['body_verified'])
+
+class ListingCandidateTests(unittest.TestCase):
+    def test_candidate_requires_specific_title_and_nearby_submission_time(self):
+        from workbench.toutiao_publisher import listing_candidate
+        draft={'title':'Mac安装应用时先看安装位置','body':'Mac安装应用时先看安装位置\n正文 (Monterey)',
+               'scheduled_at':'2026-11-03T14:47:10+08:00'}
+        self.assertTrue(listing_candidate('Mac安装应用时先看安装位置正文Monterey','2026-11-03T14:47:00+08:00',draft))
+        for text,stamp in [('别的标题','2026-11-03T14:47:00+08:00'),('Mac安装应用时先看安装位置正文','2026-11-02T14:47:00+08:00'),('Mac安装应用时先看安装位置正文',None)]:
+            self.assertFalse(listing_candidate(text,stamp,draft))

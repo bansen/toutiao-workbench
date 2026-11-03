@@ -30,7 +30,7 @@ async def main():
      setTimeout(()=>declarations.forEach(e=>document.body.appendChild(e)),700);
      </script>'''
     await route.fulfill(content_type='text/html; charset=utf-8',body=document)
-   async def public(route):await route.fulfill(content_type='text/html; charset=utf-8',body='<article style="white-space:pre-wrap">'+html.escape(audit['override'] or body)+'</article>')
+   async def public(route):await route.fulfill(content_type='text/html; charset=utf-8',body='<article style="white-space:pre-wrap">'+html.escape(audit.get('public_override') or audit['override'] or body)+'</article>')
    await browser.context.route('https://mp.toutiao.com/**',creator)
    await browser.context.route('https://www.toutiao.com/w/**',public)
    await browser.context.expose_binding('clicked',lambda source:clicks.append('submitted'))
@@ -80,6 +80,20 @@ async def main():
    except NeedsAttention:pass
    else:raise AssertionError('Unexplained content change must not match')
    assert len(clicks)==2
+   from datetime import datetime
+   from workbench.micro_schedule import TIMEZONE
+   plain='Mac安装应用时先看安装位置\n\n版本说明：(Monterey)。\n\n#AI #办公 #工具'
+   audit['override']=plain.replace('(Monterey)','Monterey')
+   audit['public_override']=plain
+   today=datetime.now(TIMEZONE).date().isoformat()
+   candidate={'title':plain.splitlines()[0],'body':plain,'scheduled_at':today+'T09:00:00+08:00'}
+   receipt=await publisher.reconcile(candidate)
+   assert receipt['status']=='published' and receipt['body_verified']
+   assert len(clicks)==2
+   audit['public_override']=plain.replace('版本说明','虚构说法')
+   try:await publisher.reconcile(candidate)
+   except NeedsAttention:pass
+   else:raise AssertionError('Title/time must never replace full public text verification')
    print('PASS: creator DOM preflight; AI off; first release off; exact text snapshot; single submit; record + public body lookup; pause prevents click.')
   finally:await browser.close()
 asyncio.run(main())

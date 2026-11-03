@@ -59,6 +59,36 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.runtime._qualify_ai(draft,[source],'AI',allow_repair=False)
         self.assertEqual(self.runtime.content.check.await_count,2)
 
+    async def test_automatic_receipt_recheck_resumes_only_after_confirmed_result(self):
+        row,_=self.enqueue();await self.runtime.verify()
+        self.runtime.queue.update(row['id'],{'status':'publishing'})
+        self.runtime.queue.update(row['id'],{'status':'uncertain'})
+        self.runtime.plans.update_slot(row['slot_id'],{'status':'uncertain'})
+        self.runtime.pause('发布结果待核实，禁止重发')
+        self.now+=timedelta(minutes=2)
+        await self.runtime._reconcile_paused()
+        self.assertEqual(self.runtime.queue.get(row['id'])['status'],'published')
+        self.assertFalse(self.runtime._paused())
+        self.assertEqual(self.publisher.calls,0)
+
+    async def test_receipt_recheck_preserves_manual_pause_and_has_bounded_attempts(self):
+        from unittest.mock import AsyncMock
+        row,_=self.enqueue();await self.runtime.verify()
+        self.runtime.queue.update(row['id'],{'status':'publishing'})
+        self.runtime.queue.update(row['id'],{'status':'uncertain'})
+        self.runtime.plans.update_slot(row['slot_id'],{'status':'uncertain'})
+        self.publisher.reconcile=AsyncMock(side_effect=ValueError('尚未匹配'))
+        self.runtime.pause('人工暂停');self.now+=timedelta(minutes=2)
+        await self.runtime._reconcile_paused();self.publisher.reconcile.assert_not_awaited()
+        self.runtime.pause('发布结果待核实，禁止重发')
+        await self.runtime._reconcile_paused()
+        await self.runtime._reconcile_paused()
+        self.assertEqual(self.publisher.reconcile.await_count,1)
+        for _ in range(4):
+            self.now+=timedelta(minutes=11);await self.runtime._reconcile_paused()
+        self.assertEqual(self.publisher.reconcile.await_count,3)
+        self.assertTrue(self.runtime._paused());self.assertEqual(self.publisher.calls,0)
+
     async def test_preparation_round_has_total_deadline_without_pausing_publication(self):
         from unittest.mock import patch
         original=asyncio.wait_for

@@ -199,6 +199,7 @@ class MicroRuntime:
                     self._prepare_task.cancel()
                     await asyncio.gather(self._prepare_task,return_exceptions=True)
                     self._log('临近已备稿排期，停止新备稿以释放浏览器和模型，优先发布')
+                await self._reconcile_paused()
                 await self.tick()
                 now = self._now()
                 if self._last_retention is None or now - self._last_retention >= timedelta(hours=1):
@@ -837,6 +838,36 @@ class MicroRuntime:
     async def reconcile(self, identity):
         async with self._tick_lock:
             return await asyncio.wait_for(self._reconcile(identity),120)
+
+    async def _reconcile_paused(self):
+        pause=self.store.setting('publishing_pause',{})
+        if (self._closed or not self._enabled() or not pause.get('paused')
+                or not pause.get('reason','').startswith(('发布结果待核实','仍有待核实的发布回执'))):return
+        unresolved=[r for r in self.queue.items() if r['status']=='uncertain']
+        attempts=self.store.setting('receipt_rechecks',{}) or {}
+        attempts={k:v for k,v in attempts.items() if any(r['id']==k for r in unresolved)}
+        for row in unresolved:
+            previous=attempts.get(row['id'],{})
+            count=previous.get('count',0)
+            if count>=3:continue
+            base=_time(previous.get('at')) or _time(row['scheduled_at'])
+            if base is None or self._now()-base<timedelta(seconds=(60,180,600)[count]):continue
+            async with self._tick_lock:
+                if self._pause_revision()!=pause.get('revision',0) or not self._paused():return
+                revision=self._pause_revision()
+                attempts[row['id']]={'count':count+1,'at':self._now().isoformat()}
+                self.store.set_setting('receipt_rechecks',attempts)
+                self._log('自动只读核查待确认回执（第'+str(count+1)+'次），不点击发布')
+                try:result=await asyncio.wait_for(self._reconcile(row['id']),90)
+                except Exception as exc:
+                    self._log('自动回执核查尚未完成：'+type(exc).__name__)
+                    return
+                if result['status']=='uncertain':return
+                if (self._pause_revision()==revision and self._enabled() and self._ready() and not self._closed
+                        and not any(r['status']=='uncertain' for r in self.queue.items())):
+                    self.store.set_setting('publishing_pause',{'paused':False,'reason':'','revision':revision})
+                    self._log('待确认回执已核实，自动恢复后续排期；未重发原内容')
+                return
 
     async def _reconcile(self, identity):
         row = self.queue.get(identity)
