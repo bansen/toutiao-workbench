@@ -45,3 +45,9 @@ class PostLayoutTests(unittest.TestCase):
     def test_short_legitimate_code_names_are_not_stripped(self):
         body='Codex 文件规则\n\n1. SKILL.md：保留文件名里的符号，版本号是3.13。\n\n#Codex #Skills #AI编程'
         self.assertEqual(format_post(body),body)
+
+class HtmlPlaceholderTests(unittest.TestCase):
+    def test_html_like_placeholder_is_blocked_but_menu_and_comparison_signs_are_allowed(self):
+        from workbench.post_layout import layout_issues
+        self.assertTrue(any('尖括号' in s for s in layout_issues('标题\n\nAuthorization: Bearer <token>\n\n#AI #工具 #办公')))
+        self.assertFalse(any('尖括号' in s for s in layout_issues('标题\n\n打开集成 > 工具，使用 YOUR_TOKEN；x < 5。\n\n#AI #工具 #办公')))

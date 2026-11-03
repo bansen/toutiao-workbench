@@ -44,6 +44,18 @@ def rendered_text(text):
     return re.sub(r'\s+',' ',text).strip()
 
 
+def receipt_body_comparison(actual,expected,*,allow_markup_adjustment=False,listing=False):
+    normalize=compact if listing else rendered_text
+    if normalize(actual)==normalize(expected):return {'body_verified':True}
+    # Observed historical platform mutation. Never used to authorize a new submit;
+    # public-page text is compared again before a published receipt is accepted.
+    if (allow_markup_adjustment and expected.count('<token>')==1 and '</token>' not in expected
+            and normalize(actual)==normalize(expected+'</token>')):
+        return {'body_verified':False,'adjustment':'platform_added_token_closure',
+                'expected_body_sha256':digest(expected),'observed_body_sha256':digest(actual)}
+    return None
+
+
 def platform_status(text):
     if any(v in text for v in ('未通过','审核不通过','发布失败')):return 'rejected'
     if '已发布' in text:return 'published'
@@ -247,7 +259,7 @@ class ToutiaoPublisher:
             except ReceiptPending:
                 if delay==10:raise
 
-    async def _lookup(self,draft):
+    async def _lookup(self,draft,*,allow_markup_adjustment=False):
         matches=[]
         today_count=0
         today=datetime.now(TIMEZONE).date()
@@ -264,15 +276,17 @@ class ToutiaoPublisher:
                 copy.querySelectorAll('.expand-span, .more-span').forEach(node=>node.remove());
                 return copy.textContent;
             }""")
-            if compact(raw)==compact(draft['body']):matches.append(row)
+            comparison=receipt_body_comparison(raw,draft['body'],allow_markup_adjustment=allow_markup_adjustment,listing=True)
+            if comparison is not None:matches.append((row,comparison))
         if not matches:raise ReceiptPending('当前作品记录尚未出现匹配正文，只核查、不重发')
         if len(matches)!=1:raise NeedsAttention('作品记录出现多条相同正文，结果待核实，禁止重发')
-        row=matches[0]
+        row,list_comparison=matches[0]
         tags=await row.locator('.tags').inner_text()
         state=platform_status(tags)
         base={'status':state,'platform_status':tags,'body_verified':False,
               'unexpected_exclusive_tag':'首发' in tags,'visible_today_count':today_count,
               'checked_at':datetime.now(TIMEZONE).isoformat()}
+        if list_comparison.get('adjustment'):base['body_difference']=list_comparison
         try:
             async with self.page.expect_popup(timeout=10000) as popup_info:
                 await row.locator('.wtt-text').click()
@@ -291,12 +305,14 @@ class ToutiaoPublisher:
                 return {**base,'url':url,'content_id':re.search(r'/w/(\d+)',url)[1]}
             await popup.locator('article').first.wait_for(timeout=15000)
             body=await popup.locator('article').first.inner_text()
-            if rendered_text(body)!=rendered_text(draft['body']):raise NeedsAttention('公开正文与发布快照不一致，须人工核查')
+            comparison=receipt_body_comparison(body,draft['body'],allow_markup_adjustment=allow_markup_adjustment)
+            if comparison is None:raise NeedsAttention('公开正文与发布快照不一致，须人工核查')
             public_text=await popup.locator('body').inner_text()
             ai_public='内容由AI生成' in public_text or '内容由 AI 生成' in public_text
             if self.expected_ai() and not ai_public:raise NeedsAttention('公开页未核实AI声明，须人工核查')
             return {'status':platform_status(tags),'platform_status':tags,'url':url,
-                    'content_id':re.search(r'/w/(\d+)',url)[1],'body_verified':True,
+                    'content_id':re.search(r'/w/(\d+)',url)[1],'body_verified':comparison['body_verified'],
+                    **({'body_difference':comparison} if comparison.get('adjustment') else {}),
                     'ai_public':ai_public,'unexpected_ai_tag':ai_public!=self.expected_ai(),'unexpected_exclusive_tag':'首发' in tags,
                     'visible_today_count':today_count,'checked_at':datetime.now(TIMEZONE).isoformat()}
         finally:await close_page(popup)
@@ -304,5 +320,5 @@ class ToutiaoPublisher:
     async def reconcile(self,row):
         try:
             await self._open(MANAGE,'.post-item')
-            return await self._lookup(row)
+            return await self._lookup(row,allow_markup_adjustment=True)
         finally:await self.close()

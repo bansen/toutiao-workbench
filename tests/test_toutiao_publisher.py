@@ -176,3 +176,16 @@ class PublisherIdentityTests(unittest.IsolatedAsyncioTestCase):
         publisher.page=page
         self.assertEqual(await publisher.check_account(),'123')
         page.wait_for_function.assert_awaited_once()
+
+class ReceiptBodyComparisonTests(unittest.TestCase):
+    def test_only_reconciliation_accepts_known_platform_token_closure(self):
+        from workbench.toutiao_publisher import receipt_body_comparison
+        body='鉴权示例：Bearer <token>。\n\n#工具 #办公 #AI'
+        actual=body+'</token>'
+        self.assertIsNone(receipt_body_comparison(actual,body))
+        match=receipt_body_comparison(actual,body,allow_markup_adjustment=True)
+        self.assertEqual(match['adjustment'],'platform_added_token_closure')
+        self.assertFalse(match['body_verified'])
+        for different in (body.replace('鉴权','匿名')+'</token>',body+'</other>',body+'</token>新增事实',body+'</token></token>'):
+            self.assertIsNone(receipt_body_comparison(different,body,allow_markup_adjustment=True))
+        self.assertTrue(receipt_body_comparison(body,body)['body_verified'])

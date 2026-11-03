@@ -7,7 +7,7 @@ LAYOUT_RULES = '''排版要求：适合手机阅读。标题独占一段，标�
 标题尽量简短，通常不超过35字；教程一项一段、每项1～2句话；新闻一段2～3句，建议每段60～120字，任何单段不超过180字。
 不要在一句话中为了凑行宽手动折行；需要简短操作或参考指令时，标签独立成段，内容保持简洁。
 末尾3～5个相关话题标签放同一行，用一个空格分隔，前面空一行。不使用装饰性分隔线、密集表情、Markdown加粗、代码围栏或表格。
-不重复正文标题，不重复标签。不要为了排版改动功能名、版本号、引语和事实。
+不重复正文标题，不重复标签。不使用HTML式尖括号占位符（如小于号token大于号），以免平台误解析；鉴权示例改用 YOUR_TOKEN 或中文说明。不要为了排版改动功能名、版本号、引语和事实。
 可发布正文禁止外链：不放http/https网址、www地址、裸域名、短链或Markdown链接。操作入口用产品名称和菜单路径描述，参考来源URL仅保存在后台sources中。'''
 
 
@@ -20,6 +20,12 @@ def external_link_issues(body):
     domain = r'(?<![a-z0-9_@./-])(?:[a-z0-9\u3400-\u9fff][a-z0-9\u3400-\u9fff-]*\.)+(?:'+tlds+r')(?![a-z0-9_-])'
     if re.search(protocols, text, re.I) or re.search(domain, text, re.I):
         return ['可发布正文不能含网址、裸域名、短链或Markdown链接；来源URL请单独保存在后台']
+    return []
+
+
+def unsafe_markup_issues(body):
+    if re.search(r'</?[A-Za-z][A-Za-z0-9_:-]*(?:\s+[^<>\n]*)?\s*/?>',body):
+        return ['正文含HTML式尖括号占位符或标签，平台可能误解析；请改用 YOUR_TOKEN 或中文说明后重新审核']
     return []
 
 
@@ -43,7 +49,7 @@ def normalize_tutorial_numbers(body):
 
 
 def layout_issues(body):
-    issues = external_link_issues(body)
+    issues = external_link_issues(body)+unsafe_markup_issues(body)
     lines = body.strip().splitlines()
     if lines and len(lines[0]) > 52:
         issues.append('标题过长，请精简到52字以内')

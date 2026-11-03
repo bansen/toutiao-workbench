@@ -155,3 +155,10 @@ class PublicationGuardTests(unittest.IsolatedAsyncioTestCase):
             if allowed:self.guard.check_time()
             else:
                 with self.assertRaises(NeedsAttention):self.guard.check_time()
+
+    async def test_angle_placeholder_is_blocked_before_reservation_or_browser_access(self):
+        candidate=draft('鉴权示例：Bearer <token>。')
+        async def callback(item):self.fail('不安全尖括号不能进入浏览器提交')
+        with self.assertRaises(NeedsAttention):
+            await self.guard.send(candidate,'account',hashlib.sha256(candidate['body'].encode()).hexdigest(),callback,callback)
+        self.assertEqual(self.ledger.records('account'),[])

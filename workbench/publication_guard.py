@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from .history_retention import recent_history
 from .browser import NeedsAttention
 from .publishing_checks import check_publish_declarations
-from .post_layout import external_link_issues
+from .post_layout import external_link_issues, unsafe_markup_issues
 from .draft_review import draft_hash
 from .micro_schedule import TIMEZONE, PUBLISH_START_HOUR, PUBLISH_END_HOUR
 
@@ -30,7 +30,7 @@ class PublicationGuard:
             return {**result, 'decision': 'review', 'reasons': ['发布账号或历史回执尚未核实，未放行发送']}
         if result['decision'] != 'clear':
             return result
-        link_issues = external_link_issues(draft.get('body',''))
+        link_issues = external_link_issues(draft.get('body',''))+unsafe_markup_issues(draft.get('body',''))
         if link_issues:
             return {**result, 'decision':'review', 'reasons':link_issues}
         if draft.get('verify'):
@@ -93,7 +93,7 @@ class PublicationGuard:
     async def send(self, candidate, account_id, confirmed_sha256, preflight, submit):
         frozen = json.loads(json.dumps(candidate, ensure_ascii=False))
         body = frozen.get('body', '')
-        link_issues = external_link_issues(body)
+        link_issues = external_link_issues(body)+unsafe_markup_issues(body)
         if link_issues:
             raise NeedsAttention('；'.join(link_issues))
         if digest(body) != confirmed_sha256:
