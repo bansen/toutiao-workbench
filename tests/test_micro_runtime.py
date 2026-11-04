@@ -64,7 +64,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.runtime.queue.update(row['id'],{'status':'publishing'})
         self.runtime.queue.update(row['id'],{'status':'uncertain'})
         self.runtime.plans.update_slot(row['slot_id'],{'status':'uncertain'})
-        self.runtime.pause('发布结果待核实，禁止重发')
+        self.runtime.pause('上次发布回执不明确，禁止自动重发')
         self.now+=timedelta(minutes=2)
         await self.runtime._reconcile_paused()
         self.assertEqual(self.runtime.queue.get(row['id'])['status'],'published')
@@ -88,6 +88,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.now+=timedelta(minutes=11);await self.runtime._reconcile_paused()
         self.assertEqual(self.publisher.reconcile.await_count,3)
         self.assertTrue(self.runtime._paused());self.assertEqual(self.publisher.calls,0)
+
 
     async def test_preparation_round_has_total_deadline_without_pausing_publication(self):
         from unittest.mock import patch
@@ -170,7 +171,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.runtime.content.check.await_count,2)
         self.assertIn('review_approval',self.store.draft(draft['id']))
 
-    async def test_recovered_drafts_are_compared_with_same_round_new_queue(self):
+    async def test_recovery_never_compares_content_with_other_queued_tasks(self):
         from unittest.mock import AsyncMock
         from workbench.ai_tools import PROFILE
         self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify();self.runtime.ai_tools=True
@@ -186,9 +187,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.runtime.content.check=AsyncMock(return_value={'passed':True,'issues':[]})
         self.runtime.llm.judge_duplicate=AsyncMock(return_value={'decision':'duplicate'})
         await self.runtime._recover_review_drafts()
-        self.assertEqual(len(self.runtime.queue.items()),1)
-        self.runtime.llm.judge_duplicate.assert_awaited_once()
-        self.assertEqual(len(self.runtime.llm.judge_duplicate.call_args.args[1]),1)
+        self.assertEqual(len(self.runtime.queue.items()),2)
+        self.runtime.llm.judge_duplicate.assert_not_awaited()
 
     async def test_expired_approval_requests_preparation_even_when_slots_occupied(self):
         from unittest.mock import patch
@@ -694,7 +694,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.publisher.probe=fail
         with self.assertRaises(ValueError): await self.runtime.verify()
         self.assertFalse(self.runtime.status()['ready']); self.assertTrue(self.runtime.status()['paused'])
-    async def test_preparation_persists_original_sources_and_never_reuses_origin(self):
+    async def test_preparation_persists_original_sources_and_allows_reusing_sources(self):
         self.plan(); self.now-=timedelta(minutes=5); await self.runtime.verify()
         async def search(word,kind,limit,exclude_urls=None,since=None):
             return [{'url':'https://www.toutiao.com/article/123456789012/','published_at':self.now.isoformat(),'comments':99,'likes':7}]
@@ -704,7 +704,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             return {'title':'标题','body':'正文','sources':[{'url':sources[0]['url']}],'verify':[]}
         self.runtime.content.generate=generate
         await self.runtime.prepare(); await self.runtime.prepare()
-        self.assertEqual(len(self.runtime.queue.items()),1)
+        self.assertEqual(len(self.runtime.queue.items()),2)
         draft=self.store.draft(self.runtime.queue.items()[0]['draft_id'])
         self.assertEqual(draft['source_snapshots'][0]['body'],'来源正文')
         self.assertEqual(draft['source_snapshots'][0]['comments'],99)
@@ -716,7 +716,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         from workbench.publication_ledger import PublicationLedger
         self.guard.ledger=PublicationLedger(self.store)
         row,draft=self.enqueue()
-        record=self.guard.ledger.record_verified(draft,'account',{'status':'uncertain','content_id':'888'})
+        record=self.guard.ledger.record_verified({**draft,'slot_id':row['slot_id']},'account',{'status':'uncertain','content_id':'888'})
         self.runtime.queue.update(row['id'],{'status':'publishing'}); self.runtime.plans.update_slot(row['slot_id'],{'status':'publishing'})
         await self.runtime.start(); await self.runtime.close()
         self.assertEqual(self.runtime.queue.get(row['id']).get('publication_id'),record['id'])
@@ -1093,7 +1093,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.runtime.content.generate.assert_not_awaited()
         self.assertEqual(self.runtime.queue.items(),[])
 
-    async def test_prepare_search_advances_past_processed_sources(self):
+    async def test_prepare_does_not_exclude_historical_sources(self):
         self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify()
         old='https://www.toutiao.com/article/123456789011/'
         new='https://www.toutiao.com/article/123456789012/'
@@ -1106,9 +1106,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         async def generate(sources,topic):return {'title':'新事件','body':'有来源的新事件','sources':[{'url':sources[0]['url']}],'verify':[]}
         self.runtime.content.generate=generate
         await self.runtime.prepare()
-        self.assertEqual(len(self.runtime.queue.items()),1)
-        self.assertTrue(all(old in excluded and since==self.now-timedelta(hours=24) for excluded,since in calls))
-        self.assertEqual(self.runtime.queue.items()[0]['sources'][0]['url'],new)
+        self.assertEqual(len(self.runtime.queue.items()),2)
+        self.assertNotIn(old,calls[0][0]);self.assertTrue(all(since==self.now-timedelta(hours=24) for _,since in calls))
+        self.assertIn(old,{r['sources'][0]['url'] for r in self.runtime.queue.items()})
 
     async def test_slow_generation_uses_next_future_slot_not_expired_slot(self):
         first=self.plan();self.now-=timedelta(minutes=5);await self.runtime.verify()

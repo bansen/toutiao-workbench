@@ -11,7 +11,7 @@ from workbench.publication_ledger import PublicationLedger, normalise_body, body
 
 
 def draft(body='城市公园本周完成升级，新增步道和休息区域，周末向居民开放。', source='https://www.toutiao.com/article/7699775205312315954/'):
-    return {'title': '公园开放', 'body': body, 'sources': [{'url': source}]}
+    return {'slot_id':hashlib.sha256((body+source).encode()).hexdigest(),'title': '公园开放', 'body': body, 'sources': [{'url': source}]}
 
 
 class PublicationLedgerTests(unittest.TestCase):
@@ -45,18 +45,18 @@ class PublicationLedgerTests(unittest.TestCase):
         self.assertEqual(body_hash(draft()['body']), result['body_hash'])
         self.assertEqual(result['matches'][0]['id'], row['id'])
 
-    def test_source_aliases_and_changed_title_are_permanent_duplicates(self):
+    def test_new_task_can_reuse_source(self):
         self.reserve()
         other = draft('今天另一条完全不同的正文。', 'http://toutiao.com/a7699775205312315954/?utm_source=feed#comment')
-        self.assertEqual(self.ledger.check_local(other, 'account')['decision'], 'duplicate')
+        self.assertEqual(self.ledger.check_local(other, 'account')['decision'], 'clear')
 
-    def test_exact_and_near_text_with_different_sources(self):
+    def test_new_tasks_can_use_identical_or_near_text(self):
         self.reserve()
         value = draft(source='https://www.toutiao.com/article/7699775205312315000/')
         value['body'] = draft()['body'].replace('，', '！') + '\n来源：新媒体'
-        self.assertEqual(self.ledger.check_local(value, 'account')['decision'], 'duplicate')
+        self.assertEqual(self.ledger.check_local(value, 'account')['decision'], 'clear')
         value['body'] = draft()['body'].replace('本周', '昨日')
-        self.assertEqual(self.ledger.check_local(value, 'account')['decision'], 'duplicate')
+        self.assertEqual(self.ledger.check_local(value, 'account')['decision'], 'clear')
         value['body'] = '海洋考察队完成深海勘测，采集珍贵生物样本，并公开全部研究资料。\n来源：同一个媒体'
         self.assertEqual(self.ledger.check_local(value, 'account')['decision'], 'clear')
 

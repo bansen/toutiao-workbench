@@ -59,17 +59,9 @@ class APITests(unittest.TestCase):
             self.assertEqual(result.text.count('AI工具排版示例'),1)
             self.assertIn('\n\n1. 具体入口',result.text)
 
-    def test_check_requires_local_origin_and_bound_account(self):
-        store=self.app.state.engine.store
-        draft=store.save_generated('task','src',1,{'title':'稿件','body':'测试正文','verify':[], 'sources':[{'url':'https://www.toutiao.com/article/7701979050666902079/'}]})
-        url='/api/drafts/'+draft['id']+'/dedup-check'
-        self.assertEqual(self.client.post(url).status_code,403)
-        self.assertEqual(self.client.post(url,headers=self.headers).json()['decision'],'review')
-        store.set_setting('publishing_account',{'id':'account','name':'测试'})
-        self.app.state.publications.record_verified(draft,'account',{'status':'published','content_id':'1880433446879241'})
-        self.assertEqual(self.client.post(url,headers=self.headers).json()['decision'],'duplicate')
-        self.assertEqual(len(self.client.get('/api/publications').json()['items']),1)
-
+    def test_content_dedup_endpoint_is_removed(self):
+        self.assertEqual(self.client.post('/api/drafts/anything/dedup-check',headers=self.headers).status_code,404)
+        self.assertNotIn('draft-dedup',self.client.get('/').text)
 
     def test_verified_private_receipt_import_is_idempotent_and_mismatch_blocks(self):
         import hashlib,json

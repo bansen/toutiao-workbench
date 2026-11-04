@@ -1,4 +1,4 @@
-"""Three-day semantic history, with permanent local duplicate fingerprints.
+"""Three-day detail retention, with durable task identities and receipts.
 
 Ambiguous timestamps are retained conservatively. Possible submissions keep
 full snapshots until their platform outcome is known.

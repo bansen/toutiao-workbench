@@ -1,8 +1,6 @@
 """Durable publication reservations. No function here sends a platform request.
 
-Near duplicates use character trigram Dice similarity >= 0.82, with a minimum
-of 20 normalized characters and length ratio >= 0.82 to avoid short-text noise.
-Input is bounded to 5,000 characters; source and exact-body matches never expire.
+Content deduplication is disabled; reservations protect only the same task identity.
 """
 import hashlib
 import json
@@ -30,7 +28,6 @@ _ALLOWED_TRANSITIONS = {
     'failed_before_submit': {'failed_before_submit'},
 }
 MAX_BODY_LENGTH = 5000
-NEAR_DUPLICATE_THRESHOLD = 0.82
 
 
 def normalise_body(body):
@@ -76,14 +73,6 @@ def _sources(draft):
     return result
 
 
-def _near(first, second):
-    if min(len(first), len(second)) < 20 or min(len(first), len(second)) / max(len(first), len(second)) < NEAR_DUPLICATE_THRESHOLD:
-        return False
-    a = {first[i:i + 3] for i in range(len(first) - 2)}
-    b = {second[i:i + 3] for i in range(len(second) - 2)}
-    return 2 * len(a & b) / (len(a) + len(b)) >= NEAR_DUPLICATE_THRESHOLD
-
-
 class PublicationLedger:
     def __init__(self, store):
         self.store = store
@@ -127,18 +116,12 @@ class PublicationLedger:
         except (ValueError, TypeError):
             source_urls = set()
             reasons.append('缺少有效来源链接，须人工核实')
-        if normalized and isinstance(body, str) and len(body) <= MAX_BODY_LENGTH:
+        task=draft.get('slot_id')
+        if task:
             for record in records:
-                reason = None
-                if source_urls & {s['url'] for s in record['sources']}:
-                    reason = '相同来源链接已有发布记录'
-                elif body_hash(body) == record['body_hash']:
-                    reason = '相同正文已有发布记录'
-                elif _near(normalized, normalise_body(record['body'])):
-                    reason = '高度近似正文已有发布记录（阈值0.82）'
-                if reason:
-                    matches.append({'id': record['id'], 'title': record.get('title', ''),
-                                    'url': (record.get('receipt') or {}).get('url', ''), 'reason': reason})
+                if record.get('slot_id')==task:
+                    matches.append({'id':record['id'],'title':record.get('title',''),
+                        'url':(record.get('receipt') or {}).get('url',''),'reason':'该发布任务已有提交记录，禁止重复点击'})
         return {'decision': 'duplicate' if matches else ('review' if reasons else 'clear'),
                 'reasons': reasons + list(dict.fromkeys(m['reason'] for m in matches)), 'matches': matches,
                 'body_hash': body_hash(body), 'history_version': self._version(records)}
@@ -183,7 +166,7 @@ class PublicationLedger:
             db.execute('BEGIN IMMEDIATE')
             record = self._get(db, identity)
             if status not in _ALLOWED_TRANSITIONS[record['status']]:
-                raise ValueError('发布状态转换无效；可能已提交的记录不能解除去重保护')
+                raise ValueError('发布状态转换无效；可能已提交的任务不能重新提交')
             if receipt is not None:
                 incoming = json.loads(self.store.dump(receipt))
                 previous = record.get('receipt') or {}

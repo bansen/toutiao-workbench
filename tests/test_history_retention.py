@@ -28,7 +28,7 @@ class RetentionTests(unittest.IsolatedAsyncioTestCase):
 
     def published(self):
         return self.ledger.record_verified(
-            {'body': '旧事件的完整报道正文', 'sources': [{'url': 'https://www.toutiao.com/article/7701979050666902079/'}],
+            {'slot_id':'original-task','body': '旧事件的完整报道正文', 'sources': [{'url': 'https://www.toutiao.com/article/7701979050666902079/'}],
              'source_snapshots': [{'body': '源文正文'}]}, 'account',
             {'status': 'published', 'content_id': '1880433446879241', 'url': 'https://www.toutiao.com/w/1880433446879241/'})
 
@@ -53,7 +53,7 @@ class RetentionTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual([r['id'] for r in recent_history(rows, NOW)], ['boundary', 'unknown', 'naive'])
 
-    def test_compaction_keeps_permanent_dedup_and_receipt(self):
+    def test_compaction_keeps_task_identity_without_content_dedup(self):
         from workbench.history_retention import compact_history
         row = self.age('publication_history', self.published(), timedelta(days=4))
         compact_history(self.store, 'publication_history', NOW)
@@ -62,8 +62,9 @@ class RetentionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('source_snapshots', loaded)
         self.assertEqual(loaded.get('body', ''), '')
         self.assertEqual(loaded['receipt'], row['receipt'])
-        self.assertEqual(self.ledger.check_local({'body': row['body'], 'sources': [{'url': 'https://www.toutiao.com/article/7701979050666902080/'}]}, 'account')['decision'], 'duplicate')
-        self.assertEqual(self.ledger.check_local({'body': '不同内容', 'sources': row['sources']}, 'account')['decision'], 'duplicate')
+        self.assertEqual(self.ledger.check_local({'slot_id':'original-task','body':'旧任务再次提交','sources':row['sources']},'account')['decision'],'duplicate')
+        self.assertEqual(self.ledger.check_local({'body': row['body'], 'sources': [{'url': 'https://www.toutiao.com/article/7701979050666902080/'}]}, 'account')['decision'], 'clear')
+        self.assertEqual(self.ledger.check_local({'body': '不同内容', 'sources': row['sources']}, 'account')['decision'], 'clear')
         self.assertEqual(self.ledger.check_local({'body': '新事件', 'sources': [{'url': 'https://www.toutiao.com/article/7701979050666902080/'}]}, 'account')['decision'], 'clear')
         compact_history(self.store, 'publication_history', NOW)
         self.assertEqual(self.ledger.get(row['id']), loaded)

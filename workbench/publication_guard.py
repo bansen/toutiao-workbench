@@ -4,7 +4,6 @@ import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from .history_retention import recent_history
 from .browser import NeedsAttention
 from .publishing_checks import check_publish_declarations
 from .post_layout import external_link_issues, unsafe_markup_issues
@@ -17,8 +16,8 @@ def digest(body):
 
 
 class PublicationGuard:
-    def __init__(self, ledger, judge, clock=None, ready=None, expected_ai=None):
-        self.ledger, self.judge = ledger, judge
+    def __init__(self, ledger, judge=None, clock=None, ready=None, expected_ai=None):
+        self.ledger = ledger
         self.ready = ready or (lambda account: True)
         self.expected_ai = expected_ai or (lambda: True)
         self.clock = clock or (lambda: datetime.now(ZoneInfo('Asia/Shanghai')))
@@ -35,53 +34,14 @@ class PublicationGuard:
             return {**result, 'decision':'review', 'reasons':link_issues}
         if draft.get('verify'):
             return {**result, 'decision': 'review', 'reasons': ['仍有待核实事项，请先人工处理']}
-        cached=draft.get('publication_approval') or {}
-        try:
-            age=self.clock()-datetime.fromisoformat(cached['at'])
-            if (cached.get('version')==1 and cached.get('account')==account_id
-                    and cached.get('history_version')==result['history_version']
-                    and cached.get('draft_hash')==draft_hash(draft) and timedelta(0)<=age<=timedelta(hours=3)):
-                return {**result,'approval':cached}
-        except (KeyError,ValueError,TypeError):pass
-        records = self.ledger.records(account_id)
-        if self.ledger._version(records) != result['history_version']:
-            return {**result, 'decision': 'review', 'retryable':True, 'reasons': ['发布历史已变化，请重新查重']}
-        records = recent_history(records, self.clock())
-        batches, batch, size = [], [], 0
-        for record in records:
-            item = {k: record.get(k) for k in ('id', 'title', 'body', 'created_at')}
-            length = len(json.dumps(item, ensure_ascii=False))
-            if batch and (len(batch) >= 20 or size + length > 24000):
-                batches.append(batch)
-                batch, size = [], 0
-            batch.append(item)
-            size += length
-        if batch:
-            batches.append(batch)
-        for batch in batches:
-            try:
-                verdict = await self.judge(draft, batch)
-                decision = verdict['decision']
-                if decision == 'duplicate':
-                    record = next(r for r in records if r['id'] == verdict['matched_id'])
-                    return {**result, 'decision': 'duplicate', 'reasons': ['同一事件已有发布记录'],
-                            'matches': [{'id': record['id'], 'title': record.get('title', ''),
-                                         'url': (record.get('receipt') or {}).get('url', ''),
-                                         'reason': '模型判定为同一事件'}]}
-                if decision != 'distinct':
-                    return {**result, 'decision': 'review', 'reasons': ['事件是否重复尚不明确，须人工核实']}
-            except Exception:
-                return {**result, 'decision': 'review', 'retryable':True, 'reasons': ['事件查重服务不可用，未放行发送']}
-        if self.ledger.check_local(draft, account_id)['history_version'] != result['history_version']:
-            return {**result, 'decision': 'review', 'retryable':True, 'reasons': ['发布历史已变化，请重新查重']}
-        return {**result,'approval':{'version':1,'account':account_id,'at':self.clock().isoformat(),
-                    'draft_hash':draft_hash(draft),'history_version':result['history_version']}}
+        return {**result,'approval':{'version':2,'account':account_id,'at':self.clock().isoformat(),
+                    'draft_hash':draft_hash(draft)}}
 
-    def review_current(self,draft,account_id,history_version):
+    def review_current(self,draft,account_id,history_version=None):
         cached=draft.get('publication_approval') or {}
         try:
-            return bool(cached.get('version')==1 and cached.get('account')==account_id
-                and cached.get('history_version')==history_version and cached.get('draft_hash')==draft_hash(draft)
+            return bool(cached.get('version')==2 and cached.get('account')==account_id
+                and cached.get('draft_hash')==draft_hash(draft)
                 and timedelta(0)<=self.clock()-datetime.fromisoformat(cached['at'])<=timedelta(hours=3))
         except (KeyError,ValueError,TypeError):return False
 
@@ -92,6 +52,8 @@ class PublicationGuard:
 
     async def send(self, candidate, account_id, confirmed_sha256, preflight, submit):
         frozen = json.loads(json.dumps(candidate, ensure_ascii=False))
+        if not isinstance(frozen.get('slot_id'),str) or not frozen['slot_id'].strip():
+            raise NeedsAttention('缺少发布任务标识，不能提交')
         body = frozen.get('body', '')
         link_issues = external_link_issues(body)+unsafe_markup_issues(body)
         if link_issues:

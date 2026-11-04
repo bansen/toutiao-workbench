@@ -46,7 +46,7 @@ def create_app(data_dir=None,browser=None,llm=None,publisher=None):
     llm=llm or LLM(*load_model_values(ROOT,data_dir),usage_path=data_dir/'model-usage.jsonl')
     engine=Engine(store,browser,llm,caps)
     publications=PublicationLedger(store)
-    guard=PublicationGuard(publications,getattr(llm,"judge_duplicate",None),
+    guard=PublicationGuard(publications,
         ready=lambda account: bool(account) and store.setting("publishing_account",{}).get("id")==account
             and not store.setting("publication_import_error",False),
         expected_ai=lambda:store.setting("publishing",{}).get("ai_declaration",False))
@@ -155,12 +155,6 @@ def create_app(data_dir=None,browser=None,llm=None,publisher=None):
     async def publication_history():
         account=store.setting("publishing_account",{})
         return {"account":account.get("name", ""),"items":publications.records(account.get("id",""))}
-
-    @app.post("/api/drafts/{identity}/dedup-check")
-    async def dedup_check(identity:str):
-        candidate=store.draft(identity)
-        account=store.setting("publishing_account",{})
-        return await guard.inspect(candidate,account.get("id",""))
 
     @app.middleware('http')
     async def local_requests(request:Request,call_next):
