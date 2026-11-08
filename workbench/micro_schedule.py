@@ -13,8 +13,8 @@ from .content_mix import assign_content_mix
 
 
 TIMEZONE = ZoneInfo('Asia/Shanghai')
-MIN_DAILY_TARGET=40
-MAX_DAILY_TARGET=45
+MIN_DAILY_TARGET=10
+MAX_DAILY_TARGET=15
 PUBLISH_START_HOUR=7
 PUBLISH_END_HOUR=23
 
@@ -99,10 +99,10 @@ def _slot_time(slot: dict) -> datetime:
 
 
 def generate_daily_plan(day_or_now: date | datetime, rng: Random) -> dict:
-    """Draw 40–45 slots between 07:00 and 23:00 in Asia/Shanghai.
+    """Draw 10–15 slots between 07:00 and 23:00 in Asia/Shanghai.
 
     Each equal stratum draws within its inner 10%. Even at 45 slots,
-    adjacent extreme draws remain at least 19.2 minutes apart.
+    adjacent extreme draws remain at least 57.6 minutes apart.
     Passing an explicit RNG makes the plan reproducible without global state.
     """
     now = _local_clock(day_or_now) if isinstance(day_or_now, datetime) else None

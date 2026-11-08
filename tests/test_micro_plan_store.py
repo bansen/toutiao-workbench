@@ -1,7 +1,8 @@
 import random
+from copy import deepcopy
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -12,26 +13,36 @@ TZ=ZoneInfo('Asia/Shanghai')
 
 
 class DailyPlanStoreTests(unittest.TestCase):
-    def test_old_daily_target_is_raised_once_preserving_occupied_times_and_types(self):
+    def test_old_daily_target_is_reduced_once_and_preserves_protected_slots(self):
         with tempfile.TemporaryDirectory() as tmp:
             store=Store(Path(tmp)/'db');plans=MicroPlanStore(store)
             now=datetime(2026,11,1,10,tzinfo=TZ)
             old=plans.get_or_create(now,random.Random(4))
             old['target']=30;old['slots']=old['slots'][:30]
+            while len(old['slots'])<30:
+                index=len(old['slots'])
+                extra=deepcopy(old['slots'][index%len(old['slots'])])
+                extra.update(id=f"{old['date']}:legacy:{index}",
+                    scheduled_at=(now+timedelta(minutes=index)).isoformat(),
+                    status='pending')
+                old['slots'].append(extra)
             old['content_mix']={'version':1,'news_ratio':.5,'news':15,'tool-guide':15}
             for i,s in enumerate(old['slots']):s['content_type']='news' if i%2==0 else 'tool-guide'
             old['slots'][8].update(status='queued',queue_id='keep')
             with store.connection() as db:db.execute('UPDATE micro_daily_plans SET payload=? WHERE day=?',(store.dump(old),old['date']))
             new=plans.get_or_create(now,random.Random(9))
-            self.assertTrue(40<=new['target']<=45)
+            self.assertTrue(10<=new['target']<=15)
             self.assertEqual(new['content_mix']['news'],(new['target']+1)//2)
             self.assertEqual(new['content_mix']['tool-guide'],new['target']//2)
-            extra=[s for s in new['slots'] if s.get('quota_increase')]
-            self.assertEqual(len(extra),new['target']-30)
+            self.assertEqual(len(new['slots']),len(old['slots']))
             for source in old['slots']:
                 saved=next(s for s in new['slots'] if s['id']==source['id'])
                 self.assertEqual(saved['scheduled_at'],source['scheduled_at'])
-                self.assertEqual(saved['content_type'],source['content_type'])
+            protected=next(s for s in new['slots'] if s['id']==old['slots'][8]['id'])
+            self.assertEqual(protected['status'],'queued')
+            self.assertEqual(protected['content_type'],old['slots'][8]['content_type'])
+            self.assertTrue(any(s.get('reason','').startswith('每日目标调整') for s in new['slots']))
+            self.assertEqual(new['target_policy'],'10-15')
             self.assertEqual(plans.get_or_create(now,random.Random(2)),new)
     def test_catchup_is_atomic_and_persists_without_redrawing_originals(self):
         with tempfile.TemporaryDirectory() as tmp:

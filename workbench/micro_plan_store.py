@@ -4,9 +4,9 @@ import random
 import sqlite3
 import uuid
 from contextlib import closing
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
-from .micro_schedule import expire_missed_slots, generate_daily_plan, add_catchup_slots, TIMEZONE, MIN_DAILY_TARGET, MAX_DAILY_TARGET, PUBLISH_START_HOUR
+from .micro_schedule import expire_missed_slots, generate_daily_plan, add_catchup_slots, TIMEZONE, MIN_DAILY_TARGET, MAX_DAILY_TARGET
 from .content_mix import assign_content_mix, content_kind
 
 
@@ -46,23 +46,42 @@ class MicroPlanStore:
                     fixed = {item['slot_id']:content_kind(item) for record in db.execute('SELECT payload FROM micro_publish_queue')
                              if (item:=json.loads(record[0]))['scheduled_at'].startswith(day)}
                 plan=assign_content_mix(plan, fixed)
-            if 24<=plan['target']<=30:
+            if not MIN_DAILY_TARGET<=plan['target']<=MAX_DAILY_TARGET:
                 previous=plan['target']
-                # A partial legacy day adopts the requested lower bound; fresh
-                # full-day plans draw the complete 40–45 range.
-                plan['target']=(MIN_DAILY_TARGET if now.astimezone(TIMEZONE).hour>=PUBLISH_START_HOUR else
-                    (rng or random.SystemRandom()).randint(MIN_DAILY_TARGET,MAX_DAILY_TARGET))
-                news=(plan['target']+1)//2-plan['content_mix']['news']
-                guides=plan['target']//2-plan['content_mix']['tool-guide']
-                for index in range(plan['target']-previous):
-                    kind='news' if news>=guides else 'tool-guide'
-                    if kind=='news':news-=1
-                    else:guides-=1
-                    plan['slots'].append({'id':day+':quota:'+str(index+1),
-                        'scheduled_at':(now.astimezone(TIMEZONE)-timedelta(microseconds=1)).isoformat(),
-                        'status':'skipped','content_type':kind,'quota_increase':True,'reason':'今日目标调整新增名额'})
-                plan['content_mix'].update(news=(plan['target']+1)//2,**{'tool-guide':plan['target']//2})
-                plan['quota_upgrade']={'from':previous,'target':plan['target'],'at':now.isoformat()}
+                target=(rng or random.SystemRandom()).randint(MIN_DAILY_TARGET,MAX_DAILY_TARGET)
+                queue_fixed={}
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='micro_publish_queue'").fetchone():
+                    for record in db.execute('SELECT payload FROM micro_publish_queue'):
+                        item=json.loads(record[0])
+                        if item['scheduled_at'].startswith(day) and item['status'] in {
+                            'pending','awaiting_confirmation','publishing','submitted','published','rejected','uncertain'
+                        }:
+                            queue_fixed[item['slot_id']]=content_kind(item)
+                protected={'queued','awaiting_confirmation','publishing','submitted','published','completed','uncertain','rejected'}
+                fixed_ids=set(queue_fixed)
+                fixed_ids.update(s['id'] for s in plan['slots'] if s['status'] in protected or s.get('queue_id'))
+                fixed_count=sum(s['status'] in protected or s['id'] in fixed_ids for s in plan['slots'])
+                # Never invalidate queued or possibly submitted posts. If those already
+                # exceed the random target, freeze new slots until the protected count.
+                plan['target']=max(target,fixed_count)
+                keep=max(0,plan['target']-fixed_count)
+                flexible=sorted((s for s in plan['slots'] if s['status']=='pending' and s['id'] not in fixed_ids),
+                                key=lambda s:s['scheduled_at'])
+                kept={s['id'] for s in flexible[:keep]}
+                for slot in flexible:
+                    if slot['id'] not in kept:
+                        slot.update(status='skipped',reason='每日目标调整，超出10–15条上限')
+                fixed={slot_id:kind for slot_id,kind in queue_fixed.items() if kind}
+                fixed.update({s['id']:s['content_type'] for s in plan['slots'] if s['id'] in fixed_ids and s.get('content_type')})
+                eligible=[s for s in plan['slots'] if s['id'] in fixed_ids or s['id'] in kept]
+                mixed=assign_content_mix({'target':plan['target'],'slots':eligible},fixed)
+                kinds={s['id']:s['content_type'] for s in mixed['slots']}
+                for slot in plan['slots']:
+                    if slot['id'] in kinds:slot['content_type']=kinds[slot['id']]
+                plan['content_mix']={'version':1,'news_ratio':.5,
+                    'news':(plan['target']+1)//2,'tool-guide':plan['target']//2}
+                plan['quota_adjustment']={'from':previous,'target':plan['target'],'at':now.isoformat()}
+            plan['target_policy']='10-15'
             plan=expire_missed_slots(plan,now)
             db.execute('INSERT INTO micro_daily_plans VALUES(?,?) ON CONFLICT(day) DO UPDATE SET payload=excluded.payload',
                        (day,self.store.dump(plan)))

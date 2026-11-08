@@ -22,7 +22,7 @@ class MicroScheduleTests(unittest.TestCase):
                 self.assertEqual(set(plan), {'date', 'timezone', 'target', 'slots', 'content_mix'})
                 self.assertEqual(plan['date'], DAY.isoformat())
                 self.assertEqual(plan['timezone'], 'Asia/Shanghai')
-                self.assertTrue(40 <= plan['target'] <= 45)
+                self.assertTrue(10 <= plan['target'] <= 15)
                 self.assertEqual(len(plan['slots']), plan['target'])
                 self.assertEqual(len({slot['id'] for slot in plan['slots']}), plan['target'])
                 times = [datetime.fromisoformat(slot['scheduled_at']) for slot in plan['slots']]
@@ -38,7 +38,7 @@ class MicroScheduleTests(unittest.TestCase):
                     self.assertLess(scheduled, end)
                 self.assertTrue(all(b - a >= timedelta(minutes=15) for a, b in zip(times, times[1:])))
                 self.assertEqual(json.loads(json.dumps(plan)), plan)
-        self.assertEqual(seen_targets, set(range(40, 46)))
+        self.assertEqual(seen_targets, set(range(10, 16)))
 
     def test_seed_reproduces_plan_and_other_seeds_change_it(self):
         plan = micro_schedule.generate_daily_plan(DAY, random.Random(7))
